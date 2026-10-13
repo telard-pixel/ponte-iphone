@@ -242,6 +242,9 @@ public sealed partial class MainViewModel : ObservableObject
 
         Device = result.Device with { Name = string.IsNullOrWhiteSpace(result.Device.Name) ? dev.Name : result.Device.Name };
         Storage = result.Storage;
+        _openNotes = result.Notes ?? [];
+        DriverInstalled = _demo || AppleDriver.IsInstalled();
+        foreach (var n in _openNotes) _log.Info("iPhone: " + n);
         switch (result.State)
         {
             case OpenState.LockedOrNotTrusted:
@@ -321,6 +324,13 @@ public sealed partial class MainViewModel : ObservableObject
             }, ct);
             EnumerationSeconds = _loadClock.Elapsed.TotalSeconds;
             Regroup();
+            if (_items.Count == 0)
+            {
+                // Aperto ma senza foto né video: si dice, invece di mostrare una griglia vuota.
+                _log.Warn($"Nessuna foto o video trovati ({_files.Count} file)");
+                Screen = AppScreen.NoCameraRoll;
+                return;
+            }
             Screen = AppScreen.Library;
             _log.Info($"Libreria letta: {_files.Count} file, {_items.Count} elementi in {EnumerationSeconds:0.0} s");
             ShowBanner(null);
@@ -345,6 +355,8 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     public double EnumerationSeconds { get; private set; }
+
+    private IReadOnlyList<string> _openNotes = [];
 
     /// <summary>
     /// Il registro dice "copiato": si controlla in sottofondo che i file siano ancora sul PC
@@ -1130,6 +1142,7 @@ public sealed partial class MainViewModel : ObservableObject
                 : Settings.DeleteRefusedDevices.Contains(Device.Key) ? "RIFIUTATA dall'iPhone" : "non ancora");
         }
         if (_browse is WorkerConnection w) Line("Riavvii del collegamento", w.Restarts.ToString(CultureInfo.InvariantCulture));
+        foreach (var n in _openNotes) Line("Telefono", n);
         Line("Cartella dati", AppPaths.Root);
         Diagnostics = sb.ToString().TrimEnd();
     }

@@ -22,6 +22,8 @@ public sealed class WpdBackend : IDeviceBackend
     private IPortableDeviceResources? _resources;
     private IPortableDeviceKeyCollection? _fileKeys;
     private string? _dcimId;
+    /// <summary>Nessuna cartella DCIM: si legge tutta la memoria, tenendo solo foto e video.</summary>
+    private bool _wholeStorage;
     private readonly List<string> _log = [];
 
     /// <summary>Annotazioni per la diagnostica (cosa ha trovato aprendo il telefono).</summary>
@@ -164,7 +166,11 @@ public sealed class WpdBackend : IDeviceBackend
         // Con il telefono bloccato o non autorizzato la memoria c'è ma è vuota.
         StorageInfo? storage = null;
         int storageChildren = 0;
+        string? storageId = null;
+        var seen = new List<string>();
         _dcimId = null;
+        _wholeStorage = false;
+        _log.Clear();
         foreach (var child in Children(WpdApi.DeviceObjectId))
         {
             IPortableDeviceValues v;
@@ -176,14 +182,28 @@ public sealed class WpdBackend : IDeviceBackend
                 bool isFunctional = isStorage || GetGuid(v, WpdApi.ObjectContentType) == WpdApi.ContentTypeFunctionalObject;
                 if (!isFunctional) continue;
                 if (isStorage)
+                {
                     storage ??= new StorageInfo(GetString(v, WpdApi.ObjectName), (long)GetULong(v, WpdApi.StorageCapacity), (long)GetULong(v, WpdApi.StorageFree));
+                    storageId ??= child;
+                }
                 var subs = Children(child);
                 if (isStorage) storageChildren += subs.Count;
+                _log.Add($"Oggetto {GetString(v, WpdApi.ObjectName)} ({(isStorage ? "memoria" : "funzione")}): {subs.Count} elementi");
                 foreach (var sub in subs)
                 {
-                    var sv = ReadValues(sub, WpdApi.ObjectName, WpdApi.ObjectOriginalFileName);
-                    var n = GetString(sv, WpdApi.ObjectOriginalFileName) is { Length: > 0 } o ? o : GetString(sv, WpdApi.ObjectName);
-                    Release(sv);
+                    string n;
+                    try
+                    {
+                        var sv = ReadValues(sub, WpdApi.ObjectName, WpdApi.ObjectOriginalFileName);
+                        n = (GetString(sv, WpdApi.ObjectOriginalFileName) is { Length: > 0 } o ? o : GetString(sv, WpdApi.ObjectName)).Trim();
+                        Release(sv);
+                    }
+                    catch (DeviceException e)
+                    {
+                        seen.Add($"? ({e.Message})");
+                        continue;
+                    }
+                    if (seen.Count < 30) seen.Add(n);
                     if (n.Equals("DCIM", StringComparison.OrdinalIgnoreCase))
                     {
                         _dcimId = sub;
@@ -198,11 +218,20 @@ public sealed class WpdBackend : IDeviceBackend
             }
         }
 
-        _log.Add($"Aperto {info.Model} iOS {info.Firmware}: memoria {(storage is null ? "non visibile" : storage.Name)}, DCIM {(_dcimId is null ? "assente" : "trovata")}");
+        _log.Add("Cartelle viste: " + (seen.Count == 0 ? "nessuna" : string.Join(", ", seen)));
+        if (_dcimId is null && storageId is not null && storageChildren > 0)
+        {
+            // La memoria c'è ma la cartella non si chiama DCIM (iOS diversi, driver diversi):
+            // si legge tutta, tenendo solo foto e video. Se non c'è niente, l'app lo dirà.
+            _dcimId = storageId;
+            _wholeStorage = true;
+        }
+        _log.Add($"Aperto {info.Model} iOS {info.Firmware}: memoria {(storage is null ? "non visibile" : storage.Name)}, " +
+                 (_wholeStorage ? "DCIM non trovata, leggo tutta la memoria" : _dcimId is null ? "DCIM assente" : "DCIM trovata"));
         var state = _dcimId is not null ? OpenState.Ready
             : storage is null || storageChildren == 0 ? OpenState.LockedOrNotTrusted
             : OpenState.NoCameraRoll;
-        return new OpenResult(info, storage, state);
+        return new OpenResult(info, storage, state, _log.ToList());
     }
 
     private IPortableDeviceKeyCollection BuildFileKeys()
@@ -245,9 +274,11 @@ public sealed class WpdBackend : IDeviceBackend
                     if (isFolder)
                     {
                         // Sugli iPhone le foto stanno un livello sotto DCIM (100APPLE, 202601_a…).
-                        if (depth < 3) Walk(id, folderPath.Length == 0 ? name : folderPath + "/" + name, depth + 1);
+                        if (depth < (_wholeStorage ? 5 : 3)) Walk(id, folderPath.Length == 0 ? name : folderPath + "/" + name, depth + 1);
                         continue;
                     }
+                    var ext = Path.GetExtension(name).TrimStart('.');
+                    if (_wholeStorage && !(MediaGrouper.IsImage(ext) || MediaGrouper.IsVideo(ext) || MediaGrouper.IsSidecar(ext))) continue;
                     var created = GetDate(v, WpdApi.ObjectDateAuthored) ?? GetDate(v, WpdApi.ObjectDateCreated);
                     var modified = GetDate(v, WpdApi.ObjectDateModified);
                     bool canDelete = !HasValue(v, WpdApi.ObjectCanDelete) || GetBool(v, WpdApi.ObjectCanDelete);

@@ -33,7 +33,8 @@ public sealed record StorageInfo(string Name, long Capacity, long Free)
 }
 
 /// <summary>Esito dell'apertura del telefono.</summary>
-public sealed record OpenResult(DeviceInfo Device, StorageInfo? Storage, OpenState State)
+/// <param name="Notes">Cosa ha trovato aprendo il telefono (nomi delle cartelle…), per la diagnostica.</param>
+public sealed record OpenResult(DeviceInfo Device, StorageInfo? Storage, OpenState State, IReadOnlyList<string>? Notes = null)
 {
     [JsonIgnore]
     public bool Ready => State == OpenState.Ready;

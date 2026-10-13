@@ -424,9 +424,23 @@
                         Visibility="{Binding ShowNoCameraRoll, Converter={StaticResource BoolToVis}}">
                 <TextBlock Style="{StaticResource Icon}" Text="&#xE753;" FontSize="44" HorizontalAlignment="Center" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
                 <TextBlock Text="Nessuna foto visibile sull'iPhone" FontSize="22" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,14,0,8" />
+                <Border Background="{DynamicResource SystemFillColorCautionBackgroundBrush}" CornerRadius="6" Padding="14,10" Margin="0,4,0,12"
+                        Visibility="{Binding DriverInstalled, Converter={StaticResource InverseBoolToVis}}">
+                    <StackPanel>
+                        <TextBlock FontWeight="SemiBold" TextWrapping="Wrap" Text="Manca il driver Apple: quasi sicuramente è questo il motivo." />
+                        <TextBlock TextWrapping="Wrap" FontSize="12.5" Margin="0,4,0,10"
+                                   Text="Senza, Windows vede la memoria dell'iPhone ma non le cartelle delle foto. Installa l'app gratuita Dispositivi Apple, poi stacca e ricollega il telefono." />
+                        <ui:Button Appearance="Primary" Content="Apri Dispositivi Apple nel Microsoft Store" Command="{Binding InstallDriverCommand}" />
+                    </StackPanel>
+                </Border>
                 <TextBlock TextAlignment="Center" TextWrapping="Wrap" Style="{StaticResource Caption}" FontSize="13"
-                           Text="Il telefono è aperto ma non c'è la cartella del Rullino. Succede quando le foto sono solo su iCloud (“Ottimizza spazio iPhone”): sull'iPhone apri Impostazioni › [il tuo nome] › iCloud › Foto e scegli “Scarica e mantieni originali”, poi ricollega." />
-                <ui:Button Content="Riprova" Margin="0,18,0,0" HorizontalAlignment="Center" Command="{Binding ReloadCommand}" />
+                           Text="Il telefono è aperto ma l'app non trova foto né video. Controlla che l'iPhone sia sbloccato e di aver toccato Autorizza, poi premi Riprova. Se usi “Ottimizza spazio iPhone”, le foto solo su iCloud via cavo non si vedono." />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
+                    <ui:Button Content="Riprova" Margin="0,0,8,0" Command="{Binding ReloadCommand}" />
+                    <ui:Button Content="Salva un rapporto sul desktop" Command="{Binding SaveReportCommand}" />
+                </StackPanel>
+                <TextBlock Style="{StaticResource Caption}" TextAlignment="Center" Margin="0,10,0,0"
+                           Text="Il rapporto dice cosa vede l'app nel telefono: mandalo a chi ti segue con l'app." />
             </StackPanel>
 
             <!-- ························ centro: impostazioni ························ -->
