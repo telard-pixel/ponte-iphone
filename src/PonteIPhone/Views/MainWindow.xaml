@@ -275,27 +275,39 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
-                <DockPanel Margin="20,14,16,6" LastChildFill="False">
-                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Bottom">
-                        <TextBlock Text="{Binding LibraryTitle}" Style="{StaticResource PageTitle}" />
-                        <TextBlock Text="{Binding LibrarySubtitle}" Style="{StaticResource Caption}" Margin="10,0,0,4" VerticalAlignment="Bottom" />
-                    </StackPanel>
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock Text="Miniature" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <Slider Width="110" Minimum="80" Maximum="220" Value="{Binding TileSize}" VerticalAlignment="Center"
-                                IsSnapToTickEnabled="True" TickFrequency="10" Margin="0,0,14,0" />
-                        <ui:Button Content="{Binding SortLabel}" Margin="0,0,6,0" Command="{Binding ToggleSortCommand}" ToolTip="Cambia l'ordine" />
-                        <ui:Button Content="Seleziona tutto" Margin="0,0,6,0" Command="{Binding SelectAllCommand}" />
-                        <ui:Button Content="Solo da copiare" Margin="0,0,6,0" Command="{Binding SelectNotCopiedCommand}" />
-                        <ui:Button Content="Deseleziona" Margin="0,0,6,0" Command="{Binding ClearSelectionCommand}" />
-                        <ui:Button ToolTip="Mostra o nascondi il pannello dettagli" Command="{Binding ToggleInspectorCommand}" Margin="0,0,6,0">
-                            <TextBlock Text="&#xE89F;" FontFamily="{StaticResource IconFont}" />
-                        </ui:Button>
-                        <ui:Button ToolTip="Rileggi il telefono (F5)" Command="{Binding ReloadCommand}">
-                            <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}" />
-                        </ui:Button>
-                    </StackPanel>
-                </DockPanel>
+                <StackPanel Margin="20,12,16,4">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                            <ui:Button ToolTip="Mostra o nascondi il pannello dettagli" Command="{Binding ToggleInspectorCommand}" Margin="0,0,6,0">
+                                <TextBlock Text="&#xE89F;" FontFamily="{StaticResource IconFont}" />
+                            </ui:Button>
+                            <ui:Button ToolTip="Rileggi il telefono (F5)" Command="{Binding ReloadCommand}">
+                                <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}" />
+                            </ui:Button>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
+                            <TextBlock Text="{Binding LibraryTitle}" Style="{StaticResource PageTitle}" />
+                            <TextBlock Text="{Binding LibrarySubtitle}" Style="{StaticResource Caption}" Margin="10,0,0,4" VerticalAlignment="Bottom" />
+                        </StackPanel>
+                    </DockPanel>
+                    <!-- Comandi su più righe se la finestra è stretta -->
+                    <WrapPanel Margin="0,8,0,0">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,18,6">
+                            <TextBlock Text="Seleziona" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <ui:Button Content="Tutto" Margin="0,0,4,0" Command="{Binding SelectAllCommand}" ToolTip="Tutti gli elementi mostrati (Ctrl+A)" />
+                            <ui:Button Content="Da copiare" Margin="0,0,4,0" Command="{Binding SelectNotCopiedCommand}" ToolTip="Solo quelli non ancora sul PC" />
+                            <ui:Button Content="Nessuno" Command="{Binding ClearSelectionCommand}" ToolTip="Deseleziona tutto (Esc)" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,18,6">
+                            <ui:Button Content="{Binding SortLabel}" Command="{Binding ToggleSortCommand}" ToolTip="Cambia l'ordine" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <TextBlock Text="Miniature" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <Slider Width="120" Minimum="80" Maximum="220" Value="{Binding TileSize}" VerticalAlignment="Center"
+                                    IsSnapToTickEnabled="True" TickFrequency="10" />
+                        </StackPanel>
+                    </WrapPanel>
+                </StackPanel>
 
                 <StackPanel Grid.Row="1" Margin="20,0,16,4" Visibility="{Binding IsLoading, Converter={StaticResource BoolToVis}}">
                     <TextBlock Text="{Binding LoadingText}" Style="{StaticResource Caption}" Margin="0,0,0,4" />
@@ -561,8 +573,17 @@
                             </Grid>
                             <StackPanel Margin="16,14,16,16">
                                 <TextBlock Text="{Binding FocusedTile.Title}" FontFamily="Cascadia Mono, Consolas" FontSize="14" />
-                                <Border CornerRadius="10" Padding="8,2" Margin="0,8,0,12" HorizontalAlignment="Left"
-                                        Background="{DynamicResource SystemFillColorSuccessBackgroundBrush}">
+                                <Border CornerRadius="10" Padding="8,2" Margin="0,8,0,12" HorizontalAlignment="Left">
+                                    <Border.Style>
+                                        <Style TargetType="Border">
+                                            <Setter Property="Background" Value="{DynamicResource ControlFillColorSecondaryBrush}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding FocusedTile.IsOnPc}" Value="True">
+                                                    <Setter Property="Background" Value="{DynamicResource SystemFillColorSuccessBackgroundBrush}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Border.Style>
                                     <TextBlock Text="{Binding FocusedOnPcText}" FontSize="12" />
                                 </Border>
                                 <Grid>

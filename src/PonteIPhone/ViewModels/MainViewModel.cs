@@ -358,6 +358,7 @@ public sealed partial class MainViewModel : ObservableObject
         foreach (var k in gone) _copies.Remove(k);
         foreach (var t in _tiles.Values) t.IsOnPc = IsOnPc(t.Item);
         UpdateCounts();
+        RefreshFocused();
         if (Filter == LibraryFilter.NotCopied) BuildRows();
     }
 
@@ -619,6 +620,11 @@ public sealed partial class MainViewModel : ObservableObject
     {
         if (oldValue is not null) oldValue.IsFocused = false;
         if (newValue is not null) newValue.IsFocused = true;
+        RefreshFocused();
+    }
+
+    private void RefreshFocused()
+    {
         OnPropertyChanged(nameof(FocusedDestination));
         OnPropertyChanged(nameof(FocusedCopyPath));
         OnPropertyChanged(nameof(FocusedOnPcText));
@@ -991,6 +997,8 @@ public sealed partial class MainViewModel : ObservableObject
         }
         foreach (var item in r.Safe) if (_tiles.TryGetValue(item.Id, out var t)) t.IsSelected = false;
         Regroup();
+        if (FocusedTile is { } f && !_tiles.ContainsKey(f.Item.Id)) FocusedTile = null; // tolto dal telefono
+        RefreshFocused();
 
         if (Device is not null && r.Mode == TransferMode.Move)
         {

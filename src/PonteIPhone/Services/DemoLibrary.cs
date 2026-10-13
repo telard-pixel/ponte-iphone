@@ -22,6 +22,8 @@ public static class DemoLibrary
             BytesPerSecond = 38L * 1024 * 1024,
         };
         var rnd = new Random(7);
+        // Foto con contenuto vero (JPEG grande), così anche l'anteprima e il pannello dettagli si vedono.
+        var photos = new Dictionary<string, (int Seed, int Scene)>();
         int number = 4812;
         var months = new[] { (2026, 10, 26), (2026, 9, 34), (2026, 8, 24), (2026, 7, 18), (2026, 6, 12) };
         foreach (var (y, m, count) in months)
@@ -37,21 +39,25 @@ public static class DemoLibrary
                 var seed = rnd.Next();
                 if (r < 0.14)
                 {
-                    fake.Add(folder, $"IMG_{n}.MOV", 6_000 + rnd.Next(30_000), when, thumbnail: Thumb(seed, 3));
+                    fake.Add(folder, $"IMG_{n}.MOV", 6_000 + rnd.Next(30_000), when, thumbnail: Thumb(seed, rnd.Next(4)));
                 }
                 else if (r < 0.20)
                 {
                     fake.Add(folder, $"IMG_{n}.PNG", 1_500 + rnd.Next(2_000), when, thumbnail: Thumb(seed, 4));
+                    photos[$"{folder}/IMG_{n}.PNG"] = (seed, 4);
                 }
                 else if (r < 0.58)
                 {
-                    var thumb = Thumb(seed, rnd.Next(3));
-                    fake.Add(folder, $"IMG_{n}.HEIC", 2_000 + rnd.Next(3_000), when, thumbnail: thumb);
+                    var scene = rnd.Next(3);
+                    fake.Add(folder, $"IMG_{n}.HEIC", 2_000 + rnd.Next(3_000), when, thumbnail: Thumb(seed, scene));
+                    photos[$"{folder}/IMG_{n}.HEIC"] = (seed, scene);
                     fake.Add(folder, $"IMG_{n}.MOV", 2_500 + rnd.Next(2_000), when);
                 }
                 else
                 {
-                    fake.Add(folder, $"IMG_{n}.HEIC", 1_800 + rnd.Next(3_500), when, thumbnail: Thumb(seed, rnd.Next(3)));
+                    var scene = rnd.Next(3);
+                    fake.Add(folder, $"IMG_{n}.HEIC", 1_800 + rnd.Next(3_500), when, thumbnail: Thumb(seed, scene));
+                    photos[$"{folder}/IMG_{n}.HEIC"] = (seed, scene);
                     if (rnd.NextDouble() < 0.12)
                     {
                         fake.Add(folder, $"IMG_E{n}.HEIC", 1_800 + rnd.Next(3_500), when);
@@ -70,22 +76,30 @@ public static class DemoLibrary
                 "AAE" => 900L,
                 _ => 1_600_000L + f.Info.Size * 600L,
             };
+            var key = f.Info.Folder + "/" + f.Info.Name;
+            if (photos.TryGetValue(key, out var p))
+            {
+                var jpeg = Thumb(p.Seed, p.Scene, 1600, 1200);
+                f.Info = f.Info with { Size = jpeg.Length };
+                f.Content = () => jpeg;
+                continue;
+            }
             var size = (int)real;
-            var seed = f.Info.Folder + "/" + f.Info.Name;
             f.Info = f.Info with { Size = size };
-            f.Content = () => FakeBackend.Deterministic(seed, size);
+            f.Content = () => FakeBackend.Deterministic(key, size);
         }
         return fake;
     }
 
     /// <summary>Miniatura disegnata: mare, tramonto, piatto, prato, schermata.</summary>
-    private static byte[] Thumb(int seed, int scene)
+    private static byte[] Thumb(int seed, int scene, int width = 240, int height = 240)
     {
         var rnd = new Random(seed);
         const int W = 240, H = 240;
         var visual = new DrawingVisual();
         using (var dc = visual.RenderOpen())
         {
+            dc.PushTransform(new ScaleTransform(width / (double)W, height / (double)H));
             Color C(double h, double s, double l) => FromHsl(h, s, l);
             switch (scene)
             {
@@ -142,7 +156,7 @@ public static class DemoLibrary
                 }
             }
         }
-        var bmp = new RenderTargetBitmap(W, H, 96, 96, PixelFormats.Pbgra32);
+        var bmp = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
         bmp.Render(visual);
         var enc = new JpegBitmapEncoder { QualityLevel = 85 };
         enc.Frames.Add(BitmapFrame.Create(bmp));

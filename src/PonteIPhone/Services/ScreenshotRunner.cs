@@ -114,15 +114,15 @@ public static class ScreenshotRunner
         root.UpdateLayout();
         int w = (int)Math.Ceiling(root.ActualWidth), h = (int)Math.Ceiling(root.ActualHeight);
         var bmp = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
-        // Sfondo pieno: la Mica di Windows non entra nell'immagine.
+        // Sfondo pieno (la Mica di Windows non entra nell'immagine), poi la finestra così com'è.
         var visual = new DrawingVisual();
         using (var dc = visual.RenderOpen())
         {
             var bg = Application.Current.TryFindResource("ApplicationBackgroundBrush") as Brush ?? Brushes.White;
             dc.DrawRectangle(bg, null, new Rect(0, 0, w, h));
-            dc.DrawRectangle(new VisualBrush(root), null, new Rect(0, 0, w, h));
         }
         bmp.Render(visual);
+        bmp.Render(root);
         var enc = new PngBitmapEncoder();
         enc.Frames.Add(BitmapFrame.Create(bmp));
         using var fs = File.Create(path);
