@@ -997,7 +997,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         foreach (var item in r.Safe) if (_tiles.TryGetValue(item.Id, out var t)) t.IsSelected = false;
         Regroup();
-        if (FocusedTile is { } f && !_tiles.ContainsKey(f.Item.Id)) FocusedTile = null; // tolto dal telefono
+        if (FocusedTile is { } focused && !_tiles.ContainsKey(focused.Item.Id)) FocusedTile = null; // tolto dal telefono
         RefreshFocused();
 
         if (Device is not null && r.Mode == TransferMode.Move)
