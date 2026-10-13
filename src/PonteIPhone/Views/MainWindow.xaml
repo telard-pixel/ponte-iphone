@@ -161,7 +161,7 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <!-- ------------------------ barra laterale ------------------------ -->
+            <!-- ························ barra laterale ························ -->
             <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
                     Background="{DynamicResource LayerFillColorDefaultBrush}">
                 <DockPanel Margin="12,14,12,12">
@@ -268,7 +268,7 @@
                 </DockPanel>
             </Border>
 
-            <!-- ------------------------ centro: libreria ------------------------ -->
+            <!-- ························ centro: libreria ························ -->
             <Grid Grid.Column="1" Visibility="{Binding ShowLibrary, Converter={StaticResource BoolToVis}}">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -330,7 +330,7 @@
                 </StackPanel>
             </Grid>
 
-            <!-- ------------------------ centro: nessun iPhone ------------------------ -->
+            <!-- ························ centro: nessun iPhone ························ -->
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowNoDevice, Converter={StaticResource BoolToVis}}">
                 <StackPanel MaxWidth="500" Margin="32" VerticalAlignment="Center" HorizontalAlignment="Center">
                     <TextBlock Text="Collega l'iPhone con il cavo USB" FontSize="26" FontWeight="SemiBold" TextWrapping="Wrap" />
@@ -397,7 +397,7 @@
                 </StackPanel>
             </ScrollViewer>
 
-            <!-- ------------------------ centro: iPhone bloccato ------------------------ -->
+            <!-- ························ centro: iPhone bloccato ························ -->
             <StackPanel Grid.Column="1" MaxWidth="460" HorizontalAlignment="Center" VerticalAlignment="Center"
                         Visibility="{Binding ShowLocked, Converter={StaticResource BoolToVis}}">
                 <TextBlock Style="{StaticResource Icon}" Text="&#xE72E;" FontSize="44" HorizontalAlignment="Center" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
@@ -407,7 +407,7 @@
                 <ui:ProgressRing IsIndeterminate="True" Width="28" Height="28" Margin="0,22,0,0" HorizontalAlignment="Center" />
             </StackPanel>
 
-            <!-- ------------------------ centro: senza Rullino ------------------------ -->
+            <!-- ························ centro: senza Rullino ························ -->
             <StackPanel Grid.Column="1" MaxWidth="520" HorizontalAlignment="Center" VerticalAlignment="Center"
                         Visibility="{Binding ShowNoCameraRoll, Converter={StaticResource BoolToVis}}">
                 <TextBlock Style="{StaticResource Icon}" Text="&#xE753;" FontSize="44" HorizontalAlignment="Center" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
@@ -417,7 +417,7 @@
                 <ui:Button Content="Riprova" Margin="0,18,0,0" HorizontalAlignment="Center" Command="{Binding ReloadCommand}" />
             </StackPanel>
 
-            <!-- ------------------------ centro: impostazioni ------------------------ -->
+            <!-- ························ centro: impostazioni ························ -->
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"
                           Visibility="{Binding IsSettingsOpen, Converter={StaticResource BoolToVis}}">
                 <StackPanel Margin="24,14,24,24" MaxWidth="760" HorizontalAlignment="Left">
@@ -543,7 +543,7 @@
                 </StackPanel>
             </ScrollViewer>
 
-            <!-- ------------------------ pannello dettagli ------------------------ -->
+            <!-- ························ pannello dettagli ························ -->
             <Border Grid.Column="2" Width="290" BorderThickness="1,0,0,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
                     Background="{DynamicResource LayerFillColorDefaultBrush}"
                     Visibility="{Binding ShowInspectorPanel, Converter={StaticResource BoolToVis}}">
