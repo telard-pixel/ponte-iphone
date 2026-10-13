@@ -31,7 +31,7 @@ public sealed class WpdBackend : IDeviceBackend
 
     public IReadOnlyList<DeviceInfo> ListDevices()
     {
-        var manager = Wpd.Create<IPortableDeviceManager>(Wpd.CLSID_PortableDeviceManager);
+        var manager = WpdApi.Create<IPortableDeviceManager>(WpdApi.CLSID_PortableDeviceManager);
         try
         {
             manager.RefreshDeviceList();
@@ -102,31 +102,31 @@ public sealed class WpdBackend : IDeviceBackend
         IPortableDevice device;
         try
         {
-            device = Wpd.Create<IPortableDevice>(Wpd.CLSID_PortableDeviceFTM);
+            device = WpdApi.Create<IPortableDevice>(WpdApi.CLSID_PortableDeviceFTM);
         }
         catch (COMException)
         {
-            device = Wpd.Create<IPortableDevice>(Wpd.CLSID_PortableDevice);
+            device = WpdApi.Create<IPortableDevice>(WpdApi.CLSID_PortableDevice);
         }
 
-        var client = Wpd.Create<IPortableDeviceValues>(Wpd.CLSID_PortableDeviceValues);
+        var client = WpdApi.Create<IPortableDeviceValues>(WpdApi.CLSID_PortableDeviceValues);
         try
         {
-            var k = Wpd.ClientName; client.SetStringValue(ref k, "Ponte iPhone");
-            k = Wpd.ClientMajor; client.SetUnsignedIntegerValue(ref k, 1);
-            k = Wpd.ClientMinor; client.SetUnsignedIntegerValue(ref k, 0);
-            k = Wpd.ClientRevision; client.SetUnsignedIntegerValue(ref k, 0);
-            k = Wpd.ClientSecurityQos; client.SetUnsignedIntegerValue(ref k, Wpd.SECURITY_IMPERSONATION);
+            var k = WpdApi.ClientName; client.SetStringValue(ref k, "Ponte iPhone");
+            k = WpdApi.ClientMajor; client.SetUnsignedIntegerValue(ref k, 1);
+            k = WpdApi.ClientMinor; client.SetUnsignedIntegerValue(ref k, 0);
+            k = WpdApi.ClientRevision; client.SetUnsignedIntegerValue(ref k, 0);
+            k = WpdApi.ClientSecurityQos; client.SetUnsignedIntegerValue(ref k, WpdApi.SECURITY_IMPERSONATION);
             // Lettura e scrittura: la scrittura serve solo per cancellare con "Sposta".
-            k = Wpd.ClientDesiredAccess; client.SetUnsignedIntegerValue(ref k, Wpd.GENERIC_READ | Wpd.GENERIC_WRITE);
-            k = Wpd.ClientShareMode; client.SetUnsignedIntegerValue(ref k, Wpd.FILE_SHARE_READ | Wpd.FILE_SHARE_WRITE);
+            k = WpdApi.ClientDesiredAccess; client.SetUnsignedIntegerValue(ref k, WpdApi.GENERIC_READ | WpdApi.GENERIC_WRITE);
+            k = WpdApi.ClientShareMode; client.SetUnsignedIntegerValue(ref k, WpdApi.FILE_SHARE_READ | WpdApi.FILE_SHARE_WRITE);
 
             int hr = device.Open(deviceId, client);
             if (hr == DeviceErrors.AccessDenied)
             {
                 // Alcuni driver concedono solo la lettura: si apre così, e "Sposta" lo scoprirà.
                 _log.Add("Apertura in scrittura rifiutata: apro in sola lettura");
-                k = Wpd.ClientDesiredAccess; client.SetUnsignedIntegerValue(ref k, Wpd.GENERIC_READ);
+                k = WpdApi.ClientDesiredAccess; client.SetUnsignedIntegerValue(ref k, WpdApi.GENERIC_READ);
                 hr = device.Open(deviceId, client);
             }
             if (hr < 0) throw new DeviceException("Impossibile aprire l'iPhone: " + DeviceErrors.Describe(hr), hr);
@@ -149,10 +149,10 @@ public sealed class WpdBackend : IDeviceBackend
         var info = new DeviceInfo(deviceId, "", "Apple Inc.", "", "", "");
         try
         {
-            var dev = ReadValues(Wpd.DeviceObjectId, Wpd.DeviceFriendlyName, Wpd.DeviceManufacturer, Wpd.DeviceModel, Wpd.DeviceSerial, Wpd.DeviceFirmware);
+            var dev = ReadValues(WpdApi.DeviceObjectId, WpdApi.DeviceFriendlyName, WpdApi.DeviceManufacturer, WpdApi.DeviceModel, WpdApi.DeviceSerial, WpdApi.DeviceFirmware);
             info = new DeviceInfo(deviceId,
-                GetString(dev, Wpd.DeviceFriendlyName), GetString(dev, Wpd.DeviceManufacturer), GetString(dev, Wpd.DeviceModel),
-                GetString(dev, Wpd.DeviceSerial), GetString(dev, Wpd.DeviceFirmware));
+                GetString(dev, WpdApi.DeviceFriendlyName), GetString(dev, WpdApi.DeviceManufacturer), GetString(dev, WpdApi.DeviceModel),
+                GetString(dev, WpdApi.DeviceSerial), GetString(dev, WpdApi.DeviceFirmware));
             Release(dev);
         }
         catch (DeviceException e)
@@ -165,24 +165,24 @@ public sealed class WpdBackend : IDeviceBackend
         StorageInfo? storage = null;
         int storageChildren = 0;
         _dcimId = null;
-        foreach (var child in Children(Wpd.DeviceObjectId))
+        foreach (var child in Children(WpdApi.DeviceObjectId))
         {
             IPortableDeviceValues v;
-            try { v = ReadValues(child, Wpd.ObjectName, Wpd.ObjectContentType, Wpd.FunctionalCategory, Wpd.StorageCapacity, Wpd.StorageFree); }
+            try { v = ReadValues(child, WpdApi.ObjectName, WpdApi.ObjectContentType, WpdApi.FunctionalCategory, WpdApi.StorageCapacity, WpdApi.StorageFree); }
             catch (DeviceException) { continue; }
             try
             {
-                bool isStorage = GetGuid(v, Wpd.FunctionalCategory) == Wpd.CategoryStorage;
-                bool isFunctional = isStorage || GetGuid(v, Wpd.ObjectContentType) == Wpd.ContentTypeFunctionalObject;
+                bool isStorage = GetGuid(v, WpdApi.FunctionalCategory) == WpdApi.CategoryStorage;
+                bool isFunctional = isStorage || GetGuid(v, WpdApi.ObjectContentType) == WpdApi.ContentTypeFunctionalObject;
                 if (!isFunctional) continue;
                 if (isStorage)
-                    storage ??= new StorageInfo(GetString(v, Wpd.ObjectName), (long)GetULong(v, Wpd.StorageCapacity), (long)GetULong(v, Wpd.StorageFree));
+                    storage ??= new StorageInfo(GetString(v, WpdApi.ObjectName), (long)GetULong(v, WpdApi.StorageCapacity), (long)GetULong(v, WpdApi.StorageFree));
                 var subs = Children(child);
                 if (isStorage) storageChildren += subs.Count;
                 foreach (var sub in subs)
                 {
-                    var sv = ReadValues(sub, Wpd.ObjectName, Wpd.ObjectOriginalFileName);
-                    var n = GetString(sv, Wpd.ObjectOriginalFileName) is { Length: > 0 } o ? o : GetString(sv, Wpd.ObjectName);
+                    var sv = ReadValues(sub, WpdApi.ObjectName, WpdApi.ObjectOriginalFileName);
+                    var n = GetString(sv, WpdApi.ObjectOriginalFileName) is { Length: > 0 } o ? o : GetString(sv, WpdApi.ObjectName);
                     Release(sv);
                     if (n.Equals("DCIM", StringComparison.OrdinalIgnoreCase))
                     {
@@ -207,12 +207,12 @@ public sealed class WpdBackend : IDeviceBackend
 
     private IPortableDeviceKeyCollection BuildFileKeys()
     {
-        var keys = Wpd.Create<IPortableDeviceKeyCollection>(Wpd.CLSID_PortableDeviceKeyCollection);
+        var keys = WpdApi.Create<IPortableDeviceKeyCollection>(WpdApi.CLSID_PortableDeviceKeyCollection);
         foreach (var k in new[]
                  {
-                     Wpd.ObjectName, Wpd.ObjectOriginalFileName, Wpd.ObjectContentType, Wpd.ObjectSize,
-                     Wpd.ObjectDateCreated, Wpd.ObjectDateModified, Wpd.ObjectDateAuthored, Wpd.ObjectCanDelete,
-                     Wpd.ObjectPersistentUniqueId,
+                     WpdApi.ObjectName, WpdApi.ObjectOriginalFileName, WpdApi.ObjectContentType, WpdApi.ObjectSize,
+                     WpdApi.ObjectDateCreated, WpdApi.ObjectDateModified, WpdApi.ObjectDateAuthored, WpdApi.ObjectCanDelete,
+                     WpdApi.ObjectPersistentUniqueId,
                  })
         {
             var key = k;
@@ -240,19 +240,19 @@ public sealed class WpdBackend : IDeviceBackend
                 if (v is null) continue;
                 try
                 {
-                    var name = GetString(v, Wpd.ObjectOriginalFileName) is { Length: > 0 } o ? o : GetString(v, Wpd.ObjectName);
-                    var isFolder = GetGuid(v, Wpd.ObjectContentType) == Wpd.ContentTypeFolder;
+                    var name = GetString(v, WpdApi.ObjectOriginalFileName) is { Length: > 0 } o ? o : GetString(v, WpdApi.ObjectName);
+                    var isFolder = GetGuid(v, WpdApi.ObjectContentType) == WpdApi.ContentTypeFolder;
                     if (isFolder)
                     {
                         // Sugli iPhone le foto stanno un livello sotto DCIM (100APPLE, 202601_a…).
                         if (depth < 3) Walk(id, folderPath.Length == 0 ? name : folderPath + "/" + name, depth + 1);
                         continue;
                     }
-                    var created = GetDate(v, Wpd.ObjectDateAuthored) ?? GetDate(v, Wpd.ObjectDateCreated);
-                    var modified = GetDate(v, Wpd.ObjectDateModified);
-                    bool canDelete = !HasValue(v, Wpd.ObjectCanDelete) || GetBool(v, Wpd.ObjectCanDelete);
-                    buffer.Add(new RemoteFile(id, name, folderPath, (long)GetULong(v, Wpd.ObjectSize), created, modified, canDelete,
-                        GetString(v, Wpd.ObjectPersistentUniqueId)));
+                    var created = GetDate(v, WpdApi.ObjectDateAuthored) ?? GetDate(v, WpdApi.ObjectDateCreated);
+                    var modified = GetDate(v, WpdApi.ObjectDateModified);
+                    bool canDelete = !HasValue(v, WpdApi.ObjectCanDelete) || GetBool(v, WpdApi.ObjectCanDelete);
+                    buffer.Add(new RemoteFile(id, name, folderPath, (long)GetULong(v, WpdApi.ObjectSize), created, modified, canDelete,
+                        GetString(v, WpdApi.ObjectPersistentUniqueId)));
                 }
                 finally
                 {
@@ -278,9 +278,9 @@ public sealed class WpdBackend : IDeviceBackend
 
     public byte[]? GetThumbnail(string objectId)
     {
-        var key = Wpd.ResourceThumbnail;
+        var key = WpdApi.ResourceThumbnail;
         uint optimal = 0;
-        int hr = Resources.GetStream(objectId, ref key, Wpd.STGM_READ, ref optimal, out var stream);
+        int hr = Resources.GetStream(objectId, ref key, WpdApi.STGM_READ, ref optimal, out var stream);
         if (hr < 0 || stream is null) return null; // il telefono non ha la miniatura di questo file
         try
         {
@@ -297,9 +297,9 @@ public sealed class WpdBackend : IDeviceBackend
 
     public DownloadResult Download(string objectId, string destination, Action<long> progress, CancellationToken ct)
     {
-        var key = Wpd.ResourceDefault;
+        var key = WpdApi.ResourceDefault;
         uint optimal = 0;
-        int hr = Resources.GetStream(objectId, ref key, Wpd.STGM_READ, ref optimal, out var stream);
+        int hr = Resources.GetStream(objectId, ref key, WpdApi.STGM_READ, ref optimal, out var stream);
         if (hr < 0 || stream is null) throw new DeviceException("Il telefono non fornisce il file: " + DeviceErrors.Describe(hr), hr);
         try
         {
@@ -364,12 +364,12 @@ public sealed class WpdBackend : IDeviceBackend
         foreach (var id in objectIds)
         {
             // Uno alla volta: l'esito di ognuno è chiaro anche se il driver non compila i risultati multipli.
-            var ids = Wpd.Create<IPortableDevicePropVariantCollection>(Wpd.CLSID_PortableDevicePropVariantCollection);
+            var ids = WpdApi.Create<IPortableDevicePropVariantCollection>(WpdApi.CLSID_PortableDevicePropVariantCollection);
             var pv = PropVariant.FromString(id);
             try
             {
                 ids.Add(ref pv);
-                int hr = Content.Delete(Wpd.PORTABLE_DEVICE_DELETE_NO_RECURSION, ids, IntPtr.Zero);
+                int hr = Content.Delete(WpdApi.PORTABLE_DEVICE_DELETE_NO_RECURSION, ids, IntPtr.Zero);
                 results.Add(new DeleteResult(id, hr >= 0, hr));
             }
             catch (COMException e)
@@ -422,7 +422,7 @@ public sealed class WpdBackend : IDeviceBackend
 
     private IPortableDeviceValues ReadValues(string objectId, params PropertyKey[] keys)
     {
-        var coll = Wpd.Create<IPortableDeviceKeyCollection>(Wpd.CLSID_PortableDeviceKeyCollection);
+        var coll = WpdApi.Create<IPortableDeviceKeyCollection>(WpdApi.CLSID_PortableDeviceKeyCollection);
         try
         {
             foreach (var k in keys)

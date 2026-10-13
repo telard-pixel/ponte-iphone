@@ -199,7 +199,7 @@ internal interface IPortableDeviceValues
 }
 
 /// <summary>Classi COM di WPD e chiavi delle proprietà usate.</summary>
-internal static class Wpd
+internal static class WpdApi
 {
     public static readonly Guid CLSID_PortableDeviceManager = new("0AF10CEC-2ECD-4B92-9581-34F6AE0637F3");
     public static readonly Guid CLSID_PortableDeviceFTM = new("F7C0039A-4762-488A-B4B3-760EF9A1BA9B");
