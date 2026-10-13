@@ -98,10 +98,10 @@ public class CaptureDateTests
     [Fact]
     public void AppleDateKeepsTheWallClockOfThePlace()
     {
-        Assert.True(CaptureDate.TryParseAppleDate("2026-10-31T23:30:05+0200", out var d));
-        Assert.Equal(new DateTime(2026, 10, 31, 23, 30, 5), d);
-        Assert.True(CaptureDate.TryParseAppleDate("2026-10-31T23:30:05-07:00", out var d2));
-        Assert.Equal(new DateTime(2026, 10, 31, 23, 30, 5), d2);
+        Assert.True(CaptureDate.TryParseAppleDate("2026-09-30T23:30:05+0200", out var d));
+        Assert.Equal(new DateTime(2026, 9, 30, 23, 30, 5), d);
+        Assert.True(CaptureDate.TryParseAppleDate("2026-09-30T23:30:05-07:00", out var d2));
+        Assert.Equal(new DateTime(2026, 9, 30, 23, 30, 5), d2);
     }
 
     [Fact]

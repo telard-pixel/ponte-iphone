@@ -37,7 +37,8 @@ public partial class App : Application
 
         if (_screenshots is null)
         {
-            ApplicationThemeManager.ApplySystemTheme();
+            // Tema chiaro/scuro di Windows, anche quando l'utente lo cambia con l'app aperta.
+            SystemThemeWatcher.Watch(window);
         }
         window.Show();
         if (_screenshots is not null) _ = ScreenshotRunner.RunAsync(window, vm, _screenshots, _log);

@@ -579,7 +579,7 @@ public sealed class TransferEngine
             // Prima il principale: spesso iOS toglie da solo gli altri, che risultano poi "non trovati" (va bene).
             var ids = new List<(MediaItem Item, MediaFile File, string Id)>();
             foreach (var item in deletable)
-                foreach (var f in item.Files.OrderBy(f => f.Role))
+                foreach (var f in item.Files.OrderBy(x => x.Role))
                     if (_ids.TryGetValue(f.File.Key, out var id)) ids.Add((item, f, id));
 
             IReadOnlyList<DeleteResult> results;
