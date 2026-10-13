@@ -1,0 +1,186 @@
+name: Build
+
+on:
+  # Ogni ramo viene compilato, provato e fotografato (niente compilazioni in locale);
+  # solo main firma e pubblica una Release.
+  push:
+    branches: ["**"]
+    paths-ignore:
+      - "**.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+# Le action sono fissate per SHA (v4): il job di firma vede la chiave privata.
+jobs:
+  build:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Numero di versione
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        # Mai più bassa dell'ultima pubblicata: altrimenti i PC non si aggiornerebbero più.
+        run: |
+          latest=$(gh release view --json tagName -q .tagName 2>/dev/null | sed 's/^v1\.0\.//' || true)
+          n=$GITHUB_RUN_NUMBER
+          if [[ "$latest" =~ ^[0-9]+$ ]] && (( n <= latest )); then n=$((latest + 1)); fi
+          echo "VERSION=1.0.$n" >> "$GITHUB_ENV"
+          echo "version=1.0.$n" >> "$GITHUB_OUTPUT"
+
+      - name: Test
+        run: dotnet test tests/PonteIPhone.Tests/PonteIPhone.Tests.csproj -c Release --logger "console;verbosity=normal"
+
+      - name: Compila l'eseguibile
+        run: >
+          dotnet publish src/PonteIPhone/PonteIPhone.csproj -c Release -r win-x64
+          --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:EnableCompressionInSingleFile=true
+          -p:DebugType=none
+          -p:Version=${{ env.VERSION }}
+          -o out
+
+      # L'app vera, con il telefono finto, fotografata in ogni schermata: un errore di XAML o di
+      # avvio fa fallire la compilazione invece di arrivare sul PC.
+      - name: Schermate (modalità dimostrativa)
+        shell: pwsh
+        run: |
+          $dir = Join-Path $PWD 'schermate'
+          $p = Start-Process -FilePath out\PonteIPhone.exe -ArgumentList '--demo','--screenshot',"`"$dir`"" -PassThru
+          if (-not $p.WaitForExit(240000)) { $p.Kill(); throw "L'app non ha finito le schermate in 4 minuti" }
+          if (Test-Path "$dir\ERRORE.txt") { Get-Content "$dir\ERRORE.txt"; throw "Errore durante le schermate" }
+          if ($p.ExitCode -ne 0) {
+            Get-ChildItem "$env:TEMP\PonteIPhone-demo-*\registro\*.log" -ErrorAction SilentlyContinue | Get-Content
+            throw "Uscita con codice $($p.ExitCode)"
+          }
+          $n = (Get-ChildItem "$dir\*.png").Count
+          if ($n -lt 10) { throw "Schermate attese 10, trovate $n" }
+          Write-Host "$n schermate"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: schermate-${{ env.VERSION }}
+          retention-days: 7
+          path: schermate/
+          if-no-files-found: ignore
+
+      - name: Firma
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          SIGN_PFX_B64: ${{ secrets.SIGN_PFX_B64 }}
+          SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $pfx = Join-Path $env:RUNNER_TEMP 'firma.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGN_PFX_B64))
+          $secure = ConvertTo-SecureString $env:SIGN_PFX_PASSWORD -AsPlainText -Force
+          $imported = $null
+          try {
+            $imported = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $secure
+            $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+              Sort-Object FullName -Descending | Select-Object -First 1
+            & $signtool.FullName sign /sha1 $imported.Thumbprint /s My /fd SHA256 /td SHA256 `
+              /tr http://timestamp.digicert.com /d "Ponte iPhone" out\PonteIPhone.exe
+            if ($LASTEXITCODE -ne 0) { throw "signtool non riuscito" }
+
+            $flags = [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+            $cert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($pfx, $env:SIGN_PFX_PASSWORD, $flags)
+            $rsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+            $sha = [Security.Cryptography.HashAlgorithmName]::SHA256
+            $pad = [Security.Cryptography.RSASignaturePadding]::Pkcs1
+            $bytes = [IO.File]::ReadAllBytes("$PWD\out\PonteIPhone.exe")
+            [IO.File]::WriteAllBytes("$PWD\out\PonteIPhone.exe.sig", $rsa.SignData($bytes, $sha, $pad))
+
+            # Controlli con il certificato pubblico del repository (lo stesso incorporato nell'app).
+            $pub = [Security.Cryptography.X509Certificates.X509Certificate2]::new("$PWD\src\PonteIPhone\PonteIPhone.cer")
+            $sig = [IO.File]::ReadAllBytes("$PWD\out\PonteIPhone.exe.sig")
+            $pubRsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($pub)
+            if (-not $pubRsa.VerifyData($bytes, $sig, $sha, $pad)) { throw "La firma separata non corrisponde al certificato del repository" }
+            $auth = Get-AuthenticodeSignature out\PonteIPhone.exe
+            if ($auth.SignerCertificate.Thumbprint -ne $pub.Thumbprint) { throw "Firma Authenticode assente o di un altro certificato" }
+            Write-Host "Firmato da $($pub.Subject), impronta $($pub.Thumbprint)"
+          } finally {
+            if ($imported) { Remove-Item "Cert:\CurrentUser\My\$($imported.Thumbprint)" -DeleteKey -ErrorAction SilentlyContinue }
+            Remove-Item $pfx -ErrorAction SilentlyContinue
+          }
+
+      - name: Pacchetto del certificato
+        if: github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          Copy-Item src\PonteIPhone\PonteIPhone.cer out\
+          Compress-Archive -Path out\PonteIPhone.cer, tools\windows\Installa-Certificato.cmd -DestinationPath out\Certificato-PonteIPhone.zip
+
+      - name: File per la release
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          key: release-${{ github.run_id }}
+          enableCrossOsArchive: true
+          path: |
+            out/PonteIPhone.exe
+            out/PonteIPhone.exe.sig
+            out/Certificato-PonteIPhone.zip
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        continue-on-error: true
+        with:
+          name: PonteIPhone-${{ env.VERSION }}
+          retention-days: 3
+          path: |
+            out/PonteIPhone.exe
+            out/PonteIPhone.exe.sig
+          if-no-files-found: ignore
+
+  release:
+    needs: build
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          key: release-${{ github.run_id }}
+          enableCrossOsArchive: true
+          fail-on-cache-miss: true
+          path: |
+            out/PonteIPhone.exe
+            out/PonteIPhone.exe.sig
+            out/Certificato-PonteIPhone.zip
+
+      - name: Pubblica release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "::error::La versione v${VERSION} esiste già: rilanciare la compilazione da capo."
+            exit 1
+          fi
+          gh release create "v${VERSION}" out/PonteIPhone.exe out/PonteIPhone.exe.sig out/Certificato-PonteIPhone.zip \
+            --target "$GITHUB_SHA" \
+            --title "Ponte iPhone ${VERSION}" \
+            --notes "Scaricare PonteIPhone.exe e avviarlo: al primo avvio propone di installarsi (menu Start e desktop). Poi si aggiorna da solo. Serve l'app gratuita Dispositivi Apple (Microsoft Store) o iTunes per il driver USB dell'iPhone. Certificato-PonteIPhone.zip è facoltativo: fa riconoscere a Windows la firma dell'app."

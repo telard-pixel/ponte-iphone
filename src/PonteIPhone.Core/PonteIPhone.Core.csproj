@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Tutto quello che non dipende da Windows: libreria, copie verificate, registro, protocollo
+       con il processo che parla con l'iPhone. Si prova con un telefono finto. -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>PonteIPhone.Core</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="MetadataExtractor" Version="2.8.1" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.8" />
+    <PackageReference Include="Magick.NET-Q8-x64" Version="14.15.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="PonteIPhone.Tests" />
+  </ItemGroup>
+</Project>

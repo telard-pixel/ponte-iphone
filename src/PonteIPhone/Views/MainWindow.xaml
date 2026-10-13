@@ -1,0 +1,756 @@
+<ui:FluentWindow x:Class="PonteIPhone.Views.MainWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+                 xmlns:vm="clr-namespace:PonteIPhone.ViewModels"
+                 Title="Ponte iPhone"
+                 Width="1260" Height="820" MinWidth="860" MinHeight="580"
+                 WindowStartupLocation="CenterScreen"
+                 ExtendsContentIntoTitleBar="True"
+                 WindowBackdropType="Mica"
+                 WindowCornerPreference="Round"
+                 Icon="pack://application:,,,/app.ico"
+                 Foreground="{DynamicResource TextFillColorPrimaryBrush}"
+                 UseLayoutRounding="True">
+
+    <ui:FluentWindow.InputBindings>
+        <KeyBinding Gesture="Ctrl+A" Command="{Binding SelectAllCommand}" />
+        <KeyBinding Gesture="F5" Command="{Binding ReloadCommand}" />
+    </ui:FluentWindow.InputBindings>
+
+    <ui:FluentWindow.Resources>
+
+        <!-- Intestazione di un mese -->
+        <DataTemplate DataType="{x:Type vm:HeaderRow}">
+            <Grid Margin="0,16,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Bottom" />
+                <TextBlock Grid.Column="1" Text="{Binding Subtitle}" Style="{StaticResource Caption}" Margin="10,0,0,1" VerticalAlignment="Bottom" />
+                <Button Grid.Column="2" Style="{StaticResource LinkButton}" Content="Seleziona il mese" VerticalAlignment="Bottom"
+                        Command="{Binding DataContext.SelectGroupCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                        CommandParameter="{Binding}" />
+            </Grid>
+        </DataTemplate>
+
+        <!-- Una riga di miniature -->
+        <DataTemplate DataType="{x:Type vm:TileRow}">
+            <ItemsControl ItemsSource="{Binding Tiles}" Margin="0,0,0,4" Focusable="False">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate DataType="{x:Type vm:TileViewModel}">
+                        <Border x:Name="TileRoot" Margin="0,0,4,0" Cursor="Hand" ToolTip="{Binding Title}"
+                                Width="{Binding DataContext.TileWidth, RelativeSource={RelativeSource AncestorType=Window}}"
+                                Height="{Binding DataContext.TileWidth, RelativeSource={RelativeSource AncestorType=Window}}"
+                                Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                                MouseLeftButtonDown="Tile_MouseLeftButtonDown"
+                                DataContextChanged="Tile_DataContextChanged">
+                            <Grid ClipToBounds="True">
+                                <TextBlock Style="{StaticResource Icon}" Text="{Binding TypeGlyph}" FontSize="30" HorizontalAlignment="Center"
+                                           Opacity="0.55" />
+                                <Image x:Name="Img" Source="{Binding Thumbnail}" Stretch="UniformToFill"
+                                       RenderOptions.BitmapScalingMode="HighQuality" />
+                                <Border x:Name="SelFrame" BorderThickness="3" BorderBrush="{DynamicResource AccentFillColorDefaultBrush}" Visibility="Collapsed" />
+                                <Border x:Name="FocusFrame" BorderThickness="2" BorderBrush="{DynamicResource TextFillColorPrimaryBrush}" Opacity="0.7" Visibility="Collapsed" />
+                                <Border x:Name="Check" Width="22" Height="22" CornerRadius="11" Margin="6" HorizontalAlignment="Left" VerticalAlignment="Top"
+                                        BorderBrush="White" BorderThickness="1.5" Background="#33000000" Opacity="0">
+                                    <TextBlock x:Name="CheckMark" Text="&#xE73E;" FontFamily="{StaticResource IconFont}" FontSize="11" Foreground="White"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed" />
+                                </Border>
+                                <Border HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="5" Background="#8C000000" CornerRadius="3" Padding="5,1"
+                                        Visibility="{Binding IsLive, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="LIVE" Foreground="White" FontSize="10" FontWeight="SemiBold" />
+                                </Border>
+                                <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="5" Background="#8C000000" CornerRadius="3" Padding="5,1"
+                                        Visibility="{Binding IsVideo, Converter={StaticResource BoolToVis}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE768;" FontFamily="{StaticResource IconFont}" FontSize="9" Foreground="White" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                        <TextBlock Text="{Binding Badge}" Foreground="White" FontSize="10" />
+                                    </StackPanel>
+                                </Border>
+                                <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="5" Background="#D91D7A3A" CornerRadius="3" Padding="5,1"
+                                        Visibility="{Binding IsOnPc, Converter={StaticResource BoolToVis}}" ToolTip="Già copiato sul PC">
+                                    <TextBlock Text="✓ PC" Foreground="White" FontSize="10" FontWeight="SemiBold" />
+                                </Border>
+                            </Grid>
+                        </Border>
+                        <DataTemplate.Triggers>
+                            <Trigger SourceName="TileRoot" Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Check" Property="Opacity" Value="1" />
+                            </Trigger>
+                            <DataTrigger Binding="{Binding IsFocused}" Value="True">
+                                <Setter TargetName="FocusFrame" Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                <Setter TargetName="SelFrame" Property="Visibility" Value="Visible" />
+                                <Setter TargetName="Check" Property="Opacity" Value="1" />
+                                <Setter TargetName="Check" Property="Background" Value="{DynamicResource AccentFillColorDefaultBrush}" />
+                                <Setter TargetName="CheckMark" Property="Visibility" Value="Visible" />
+                                <Setter TargetName="Img" Property="Margin" Value="7" />
+                                <Setter TargetName="TileRoot" Property="Background" Value="{DynamicResource SubtleFillColorSecondaryBrush}" />
+                            </DataTrigger>
+                        </DataTemplate.Triggers>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </DataTemplate>
+    </ui:FluentWindow.Resources>
+
+    <Grid x:Name="Root">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="Ponte iPhone">
+            <ui:TitleBar.Icon>
+                <ui:ImageIcon Source="pack://application:,,,/app.ico" />
+            </ui:TitleBar.Icon>
+        </ui:TitleBar>
+
+        <!-- ============================ avvisi in alto ============================ -->
+        <StackPanel Grid.Row="1">
+            <Border Background="{DynamicResource SystemFillColorAttentionBackgroundBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="0,1" Padding="16,8"
+                    Visibility="{Binding UpdateText, Converter={StaticResource NotNullToVis}}">
+                <DockPanel>
+                    <ui:Button DockPanel.Dock="Right" Appearance="Primary" Content="Aggiorna e riavvia" Command="{Binding InstallUpdateCommand}"
+                               IsEnabled="{Binding IsTransferring, Converter={StaticResource InverseBool}}" />
+                    <TextBlock Style="{StaticResource Icon}" Text="&#xE896;" Margin="0,0,10,0" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                    <TextBlock VerticalAlignment="Center" Text="{Binding UpdateText}" />
+                </DockPanel>
+            </Border>
+            <Border Background="{DynamicResource SystemFillColorAttentionBackgroundBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                    BorderThickness="0,1" Padding="16,8" x:Name="InstallBanner"
+                    Visibility="{Binding ShowInstallBanner, Converter={StaticResource BoolToVis}}">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <ui:Button Content="Più tardi" Margin="0,0,8,0" Command="{Binding DismissInstallBannerCommand}" />
+                        <ui:Button Appearance="Primary" Content="Installa sul PC" Command="{Binding SelfInstallNowCommand}" />
+                    </StackPanel>
+                    <TextBlock Style="{StaticResource Icon}" Text="&#xE946;" Margin="0,0,10,0" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                    <TextBlock VerticalAlignment="Center" TextWrapping="Wrap"
+                               Text="Installa Ponte iPhone su questo PC: lo trovi nel menu Start e sul desktop, e si aggiorna da solo." />
+                </DockPanel>
+            </Border>
+            <Border x:Name="MessageBanner" BorderThickness="0,1" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" Padding="16,8"
+                    Background="{DynamicResource SystemFillColorCautionBackgroundBrush}"
+                    Visibility="{Binding BannerText, Converter={StaticResource NotNullToVis}}">
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Content="Chiudi" Command="{Binding DismissBannerCommand}" />
+                    <TextBlock Style="{StaticResource Icon}" Text="&#xE7BA;" Margin="0,0,10,0" Foreground="{DynamicResource SystemFillColorCautionBrush}" />
+                    <TextBlock VerticalAlignment="Center" TextWrapping="Wrap" Text="{Binding BannerText}" />
+                </DockPanel>
+            </Border>
+        </StackPanel>
+
+        <!-- ============================ corpo ============================ -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="240" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <!-- ------------------------ barra laterale ------------------------ -->
+            <Border Grid.Column="0" BorderThickness="0,0,1,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                    Background="{DynamicResource LayerFillColorDefaultBrush}">
+                <DockPanel Margin="12,14,12,12">
+                    <!-- telefono -->
+                    <Border DockPanel.Dock="Top" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" CornerRadius="7"
+                            BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1" Padding="10">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border Width="30" Height="48" CornerRadius="7" BorderThickness="2" BorderBrush="{DynamicResource TextFillColorPrimaryBrush}"
+                                    VerticalAlignment="Center" Margin="2,0,12,0" x:Name="PhoneShape">
+                                <Border Width="10" Height="3" CornerRadius="1.5" Background="{DynamicResource TextFillColorPrimaryBrush}"
+                                        VerticalAlignment="Top" Margin="0,4,0,0" />
+                            </Border>
+                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding DeviceName}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis" />
+                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                    <Ellipse x:Name="StatusDot" Width="7" Height="7" Margin="0,0,6,0" VerticalAlignment="Center"
+                                             Fill="{DynamicResource SystemFillColorSuccessBrush}" />
+                                    <TextBlock Text="{Binding DeviceStatus}" Style="{StaticResource Caption}" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding DeviceModel}" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <!-- memoria -->
+                    <StackPanel DockPanel.Dock="Top" Margin="4,12,4,0" Visibility="{Binding HasStorage, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="{Binding StorageText}" Style="{StaticResource Caption}" Margin="0,0,0,5" />
+                        <ProgressBar Height="5" Minimum="0" Maximum="1" Value="{Binding StorageFraction, Mode=OneWay}" />
+                    </StackPanel>
+
+                    <!-- in fondo -->
+                    <StackPanel DockPanel.Dock="Bottom" Margin="6,10,6,0">
+                        <TextBlock Text="{Binding SidebarSummary}" Style="{StaticResource Caption}" />
+                        <Button Style="{StaticResource LinkButton}" Content="Apri la cartella delle foto" Margin="-4,4,0,0" HorizontalAlignment="Left"
+                                Command="{Binding OpenDestinationCommand}" />
+                    </StackPanel>
+
+                    <StackPanel Margin="0,18,0,0">
+                        <StackPanel Visibility="{Binding HasDevice, Converter={StaticResource BoolToVis}}">
+                            <TextBlock Text="LIBRERIA" Style="{StaticResource SectionLabel}" />
+                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding SetFilterCommand}" CommandParameter="All"
+                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=All}">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountAll, StringFormat=N0}" Style="{StaticResource Caption}" />
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xF0E2;" Margin="0,0,10,0" />
+                                    <TextBlock Text="Tutto" />
+                                </DockPanel>
+                            </RadioButton>
+                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding SetFilterCommand}" CommandParameter="Photos"
+                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=Photos}">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountPhotos, StringFormat=N0}" Style="{StaticResource Caption}" />
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE91B;" Margin="0,0,10,0" />
+                                    <TextBlock Text="Foto" />
+                                </DockPanel>
+                            </RadioButton>
+                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding SetFilterCommand}" CommandParameter="Live"
+                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=Live}">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountLive, StringFormat=N0}" Style="{StaticResource Caption}" />
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xEA3A;" Margin="0,0,10,0" />
+                                    <TextBlock Text="Live Photo" />
+                                </DockPanel>
+                            </RadioButton>
+                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding SetFilterCommand}" CommandParameter="Videos"
+                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=Videos}">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountVideos, StringFormat=N0}" Style="{StaticResource Caption}" />
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE714;" Margin="0,0,10,0" />
+                                    <TextBlock Text="Video" />
+                                </DockPanel>
+                            </RadioButton>
+                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding SetFilterCommand}" CommandParameter="Screenshots"
+                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=Screenshots}">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountScreenshots, StringFormat=N0}" Style="{StaticResource Caption}" />
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE8EA;" Margin="0,0,10,0" />
+                                    <TextBlock Text="Screenshot" />
+                                </DockPanel>
+                            </RadioButton>
+                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding SetFilterCommand}" CommandParameter="NotCopied"
+                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=NotCopied}">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountNotCopied, StringFormat=N0}" Style="{StaticResource Caption}" />
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE710;" Margin="0,0,10,0" />
+                                    <TextBlock Text="Da copiare" />
+                                </DockPanel>
+                            </RadioButton>
+                        </StackPanel>
+
+                        <TextBlock Text="APP" Style="{StaticResource SectionLabel}" Margin="10,16,0,4" />
+                        <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding OpenSettingsCommand}"
+                                     IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=Settings}">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Style="{StaticResource Icon}" Text="&#xE713;" Margin="0,0,10,0" />
+                                <TextBlock Text="Impostazioni" />
+                            </StackPanel>
+                        </RadioButton>
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+
+            <!-- ------------------------ centro: libreria ------------------------ -->
+            <Grid Grid.Column="1" Visibility="{Binding ShowLibrary, Converter={StaticResource BoolToVis}}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+                <DockPanel Margin="20,14,16,6" LastChildFill="False">
+                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Bottom">
+                        <TextBlock Text="{Binding LibraryTitle}" Style="{StaticResource PageTitle}" />
+                        <TextBlock Text="{Binding LibrarySubtitle}" Style="{StaticResource Caption}" Margin="10,0,0,4" VerticalAlignment="Bottom" />
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="Miniature" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <Slider Width="110" Minimum="80" Maximum="220" Value="{Binding TileSize}" VerticalAlignment="Center"
+                                IsSnapToTickEnabled="True" TickFrequency="10" Margin="0,0,14,0" />
+                        <ui:Button Content="{Binding SortLabel}" Margin="0,0,6,0" Command="{Binding ToggleSortCommand}" ToolTip="Cambia l'ordine" />
+                        <ui:Button Content="Seleziona tutto" Margin="0,0,6,0" Command="{Binding SelectAllCommand}" />
+                        <ui:Button Content="Solo da copiare" Margin="0,0,6,0" Command="{Binding SelectNotCopiedCommand}" />
+                        <ui:Button Content="Deseleziona" Margin="0,0,6,0" Command="{Binding ClearSelectionCommand}" />
+                        <ui:Button ToolTip="Mostra o nascondi il pannello dettagli" Command="{Binding ToggleInspectorCommand}" Margin="0,0,6,0">
+                            <TextBlock Text="&#xE89F;" FontFamily="{StaticResource IconFont}" />
+                        </ui:Button>
+                        <ui:Button ToolTip="Rileggi il telefono (F5)" Command="{Binding ReloadCommand}">
+                            <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}" />
+                        </ui:Button>
+                    </StackPanel>
+                </DockPanel>
+
+                <StackPanel Grid.Row="1" Margin="20,0,16,4" Visibility="{Binding IsLoading, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding LoadingText}" Style="{StaticResource Caption}" Margin="0,0,0,4" />
+                    <ProgressBar IsIndeterminate="True" Height="3" />
+                </StackPanel>
+
+                <ItemsControl x:Name="RowsList" Grid.Row="2" ItemsSource="{Binding Rows}" Padding="20,0,16,16"
+                              VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling"
+                              VirtualizingPanel.ScrollUnit="Pixel" ScrollViewer.CanContentScroll="True"
+                              SizeChanged="RowsList_SizeChanged" Focusable="False">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <VirtualizingStackPanel />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.Template>
+                        <ControlTemplate TargetType="ItemsControl">
+                            <ScrollViewer CanContentScroll="True" Padding="{TemplateBinding Padding}" Focusable="False"
+                                          HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                <ItemsPresenter />
+                            </ScrollViewer>
+                        </ControlTemplate>
+                    </ItemsControl.Template>
+                </ItemsControl>
+
+                <StackPanel Grid.Row="2" HorizontalAlignment="Center" VerticalAlignment="Center"
+                            Visibility="{Binding IsFilteredEmpty, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Style="{StaticResource Icon}" Text="&#xE930;" FontSize="40" HorizontalAlignment="Center"
+                               Foreground="{DynamicResource SystemFillColorSuccessBrush}" />
+                    <TextBlock Text="Niente da mostrare qui" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,10,0,4" />
+                    <TextBlock Text="Con il filtro “Da copiare” vuoto, tutto è già sul PC." Style="{StaticResource Caption}" HorizontalAlignment="Center" />
+                </StackPanel>
+            </Grid>
+
+            <!-- ------------------------ centro: nessun iPhone ------------------------ -->
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowNoDevice, Converter={StaticResource BoolToVis}}">
+                <StackPanel MaxWidth="500" Margin="32" VerticalAlignment="Center" HorizontalAlignment="Center">
+                    <TextBlock Text="Collega l'iPhone con il cavo USB" FontSize="26" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock Text="La libreria compare da sola appena il telefono è pronto." Style="{StaticResource Caption}" FontSize="13" Margin="0,6,0,22" />
+
+                    <Grid Margin="0,0,0,14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="32" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="DriverOk" Style="{StaticResource Icon}" Text="&#xE930;" FontSize="18" VerticalAlignment="Top"
+                                   Foreground="{DynamicResource SystemFillColorSuccessBrush}"
+                                   Visibility="{Binding DriverInstalled, Converter={StaticResource BoolToVis}}" />
+                        <TextBlock Style="{StaticResource Icon}" Text="&#xE7BA;" FontSize="18" VerticalAlignment="Top"
+                                   Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                                   Visibility="{Binding DriverInstalled, Converter={StaticResource InverseBoolToVis}}" />
+                        <StackPanel Grid.Column="1">
+                            <TextBlock FontSize="14" TextWrapping="Wrap" Text="Driver Apple installato"
+                                       Visibility="{Binding DriverInstalled, Converter={StaticResource BoolToVis}}" />
+                            <StackPanel Visibility="{Binding DriverInstalled, Converter={StaticResource InverseBoolToVis}}">
+                                <TextBlock FontSize="14" TextWrapping="Wrap" Text="Manca il driver USB dell'iPhone" FontWeight="SemiBold" />
+                                <TextBlock Style="{StaticResource Caption}" Margin="0,2,0,8"
+                                           Text="Si installa con l'app gratuita Dispositivi Apple (o con iTunes). Senza, Windows non vede il telefono." />
+                                <ui:Button Appearance="Primary" Content="Apri Dispositivi Apple nel Microsoft Store" Command="{Binding InstallDriverCommand}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+                    <Grid Margin="0,0,0,14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="32" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Width="20" Height="20" CornerRadius="10" Background="{DynamicResource ControlFillColorSecondaryBrush}" HorizontalAlignment="Left" VerticalAlignment="Top">
+                            <TextBlock Text="2" FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <TextBlock Grid.Column="1" FontSize="14" TextWrapping="Wrap" Text="Collega il cavo e sblocca il telefono." />
+                    </Grid>
+                    <Grid Margin="0,0,0,14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="32" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Width="20" Height="20" CornerRadius="10" Background="{DynamicResource ControlFillColorSecondaryBrush}" HorizontalAlignment="Left" VerticalAlignment="Top">
+                            <TextBlock Text="3" FontSize="11" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <TextBlock Grid.Column="1" FontSize="14" TextWrapping="Wrap">
+                            <Run Text="Se l'iPhone chiede “Autorizzare questo computer?”, tocca" /> <Run Text="Autorizza" FontWeight="SemiBold" /> <Run Text="e inserisci il codice." />
+                        </TextBlock>
+                    </Grid>
+                    <Border Style="{StaticResource SettingCard}" Margin="0,10,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="32" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource Icon}" Text="&#xE82F;" FontSize="18" VerticalAlignment="Top" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                            <StackPanel Grid.Column="1">
+                                <TextBlock FontWeight="SemiBold" TextWrapping="Wrap" Text="Consiglio: “Mantieni originali”" />
+                                <TextBlock Style="{StaticResource Caption}" Margin="0,3,0,0"
+                                           Text="Sull'iPhone: Impostazioni › App › Foto › Trasferisci su Mac o PC › Mantieni originali. Così il telefono non converte i file durante la copia, che è la causa principale dei blocchi con i video." />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ------------------------ centro: iPhone bloccato ------------------------ -->
+            <StackPanel Grid.Column="1" MaxWidth="460" HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding ShowLocked, Converter={StaticResource BoolToVis}}">
+                <TextBlock Style="{StaticResource Icon}" Text="&#xE72E;" FontSize="44" HorizontalAlignment="Center" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                <TextBlock Text="Sblocca l'iPhone" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,14,0,8" />
+                <TextBlock TextAlignment="Center" TextWrapping="Wrap" Style="{StaticResource Caption}" FontSize="13"
+                           Text="Il telefono è collegato ma non mostra le foto. Sbloccalo e, se compare “Autorizzare questo computer?”, tocca Autorizza. L'app riprova da sola ogni pochi secondi." />
+                <ui:ProgressRing IsIndeterminate="True" Width="28" Height="28" Margin="0,22,0,0" HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <!-- ------------------------ centro: senza Rullino ------------------------ -->
+            <StackPanel Grid.Column="1" MaxWidth="520" HorizontalAlignment="Center" VerticalAlignment="Center"
+                        Visibility="{Binding ShowNoCameraRoll, Converter={StaticResource BoolToVis}}">
+                <TextBlock Style="{StaticResource Icon}" Text="&#xE753;" FontSize="44" HorizontalAlignment="Center" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                <TextBlock Text="Nessuna foto visibile sull'iPhone" FontSize="22" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,14,0,8" />
+                <TextBlock TextAlignment="Center" TextWrapping="Wrap" Style="{StaticResource Caption}" FontSize="13"
+                           Text="Il telefono è aperto ma non c'è la cartella del Rullino. Succede quando le foto sono solo su iCloud (“Ottimizza spazio iPhone”): sull'iPhone apri Impostazioni › [il tuo nome] › iCloud › Foto e scegli “Scarica e mantieni originali”, poi ricollega." />
+                <ui:Button Content="Riprova" Margin="0,18,0,0" HorizontalAlignment="Center" Command="{Binding ReloadCommand}" />
+            </StackPanel>
+
+            <!-- ------------------------ centro: impostazioni ------------------------ -->
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"
+                          Visibility="{Binding IsSettingsOpen, Converter={StaticResource BoolToVis}}">
+                <StackPanel Margin="24,14,24,24" MaxWidth="760" HorizontalAlignment="Left">
+                    <TextBlock Text="Impostazioni" Style="{StaticResource PageTitle}" Margin="0,0,0,16" />
+
+                    <TextBlock Text="Dove salvare" FontWeight="SemiBold" Margin="0,0,0,8" />
+                    <Border Style="{StaticResource SettingCard}">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:Button Content="Apri" Margin="0,0,6,0" Command="{Binding OpenDestinationCommand}" />
+                                <ui:Button Content="Cambia…" Command="{Binding ChooseDestinationCommand}" />
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Text="Cartella di destinazione" />
+                                <TextBlock Text="{Binding DestinationRoot}" Style="{StaticResource Caption}" FontFamily="Cascadia Mono, Consolas" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Border Style="{StaticResource SettingCard}">
+                        <DockPanel>
+                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding ByYearMonth}" />
+                            <StackPanel>
+                                <TextBlock Text="Sottocartelle per anno e mese" />
+                                <TextBlock Text="Dalla data di scatto letta nel file, es. 2026\10-Ottobre" Style="{StaticResource Caption}" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Border Style="{StaticResource SettingCard}">
+                        <DockPanel>
+                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding SkipAlreadyCopied}" />
+                            <StackPanel>
+                                <TextBlock Text="Salta gli elementi già copiati" />
+                                <TextBlock Text="Riconosciuti dal registro delle copie, anche dopo mesi" Style="{StaticResource Caption}" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <TextBlock Text="Formati" FontWeight="SemiBold" Margin="0,16,0,8" />
+                    <Border Style="{StaticResource SettingCard}">
+                        <DockPanel>
+                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding ConvertHeic}" />
+                            <StackPanel>
+                                <TextBlock Text="Converti le foto HEIC in JPG" />
+                                <TextBlock Text="Per aprirle su qualsiasi PC o programma. Mantiene data, luogo e colori" Style="{StaticResource Caption}" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Border Style="{StaticResource SettingCard}" Visibility="{Binding ConvertHeic, Converter={StaticResource BoolToVis}}">
+                        <DockPanel>
+                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding KeepHeicOriginal}" />
+                            <StackPanel>
+                                <TextBlock Text="Tieni anche l'originale HEIC" />
+                                <TextBlock Text="Accanto al JPG, nella stessa cartella" Style="{StaticResource Caption}" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Border Style="{StaticResource SettingCard}">
+                        <DockPanel>
+                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding IncludeEdited}" />
+                            <StackPanel>
+                                <TextBlock Text="Copia anche le versioni modificate" />
+                                <TextBlock Text="IMG_E… accanto all'originale. Con Sposta si copiano sempre, altrimenti andrebbero perse" Style="{StaticResource Caption}" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Border Style="{StaticResource SettingCard}">
+                        <DockPanel>
+                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding IncludeSidecars}" />
+                            <StackPanel>
+                                <TextBlock Text="Copia i file .AAE" />
+                                <TextBlock Text="Istruzioni di modifica di Apple: su Windows non servono" Style="{StaticResource Caption}" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <TextBlock Text="Sicurezza" FontWeight="SemiBold" Margin="0,16,0,8" />
+                    <Border Style="{StaticResource SettingCard}">
+                        <DockPanel>
+                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding ConfirmMove}" />
+                            <StackPanel>
+                                <TextBlock Text="Chiedi conferma prima di Sposta" />
+                                <TextBlock Text="Riepilogo con l'avviso su Foto di iCloud" Style="{StaticResource Caption}" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+                    <Border Style="{StaticResource SettingCard}">
+                        <DockPanel>
+                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding KeepAwakeSetting}" />
+                            <StackPanel>
+                                <TextBlock Text="Tieni sveglio il PC durante le copie" />
+                                <TextBlock Text="Il PC non va in sospensione a metà di un trasferimento lungo" Style="{StaticResource Caption}" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <TextBlock Text="Aggiornamenti" FontWeight="SemiBold" Margin="0,16,0,8" />
+                    <Border Style="{StaticResource SettingCard}">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                                <ui:Button Content="Controlla ora" Margin="0,0,12,0" Command="{Binding CheckUpdatesNowCommand}" />
+                                <ui:ToggleSwitch IsChecked="{Binding AutoUpdate}" />
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Text="Aggiornamenti automatici" />
+                                <TextBlock Style="{StaticResource Caption}">
+                                    <Run Text="{Binding VersionText, Mode=OneWay}" /><Run Text=" · " /><Run Text="{Binding UpdateStatus, Mode=OneWay}" />
+                                </TextBlock>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <TextBlock Text="Diagnostica" FontWeight="SemiBold" Margin="0,16,0,8" />
+                    <Border Style="{StaticResource SettingCard}">
+                        <StackPanel>
+                            <TextBox Text="{Binding Diagnostics, Mode=OneWay}" IsReadOnly="True" FontFamily="Cascadia Mono, Consolas" FontSize="12"
+                                     TextWrapping="NoWrap" HorizontalScrollBarVisibility="Auto" BorderThickness="0" />
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <ui:Button Content="Salva un rapporto sul desktop" Margin="0,0,8,0" Command="{Binding SaveReportCommand}" />
+                                <ui:Button Content="Apri il registro" Command="{Binding OpenLogFolderCommand}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ------------------------ pannello dettagli ------------------------ -->
+            <Border Grid.Column="2" Width="290" BorderThickness="1,0,0,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                    Background="{DynamicResource LayerFillColorDefaultBrush}"
+                    Visibility="{Binding ShowInspectorPanel, Converter={StaticResource BoolToVis}}">
+                <Grid>
+                    <TextBlock Text="Scegli una foto per vederne i dettagli" Style="{StaticResource Caption}" Margin="20" HorizontalAlignment="Center"
+                               VerticalAlignment="Center" TextAlignment="Center"
+                               Visibility="{Binding FocusedTile, Converter={StaticResource NullToVis}}" />
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Visibility="{Binding FocusedTile, Converter={StaticResource NotNullToVis}}">
+                        <StackPanel>
+                            <Grid Height="220" Background="#FF0E1012" Cursor="Hand" MouseLeftButtonDown="InspectorImage_MouseLeftButtonDown"
+                                  ToolTip="Doppio clic su una miniatura (o clic qui) per l'anteprima grande">
+                                <Image Source="{Binding FocusedImage}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
+                                <ui:ProgressRing IsIndeterminate="True" Width="22" Height="22" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="10"
+                                                 Visibility="{Binding FocusedImageLoading, Converter={StaticResource BoolToVis}}" />
+                            </Grid>
+                            <StackPanel Margin="16,14,16,16">
+                                <TextBlock Text="{Binding FocusedTile.Title}" FontFamily="Cascadia Mono, Consolas" FontSize="14" />
+                                <Border CornerRadius="10" Padding="8,2" Margin="0,8,0,12" HorizontalAlignment="Left"
+                                        Background="{DynamicResource SystemFillColorSuccessBackgroundBrush}">
+                                    <TextBlock Text="{Binding FocusedOnPcText}" FontSize="12" />
+                                </Border>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <TextBlock Grid.Row="0" Text="Data" Style="{StaticResource Caption}" Margin="0,0,14,6" />
+                                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding FocusedTile.DateText}" TextAlignment="Right" TextWrapping="Wrap" FontSize="12.5" />
+                                    <TextBlock Grid.Row="1" Text="Tipo" Style="{StaticResource Caption}" Margin="0,0,14,6" />
+                                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding FocusedTile.KindText}" TextAlignment="Right" FontSize="12.5" />
+                                    <TextBlock Grid.Row="2" Text="Dimensione" Style="{StaticResource Caption}" Margin="0,0,14,6" />
+                                    <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding FocusedTile.SizeText}" TextAlignment="Right" FontSize="12.5" />
+                                    <TextBlock Grid.Row="3" Text="Finirà in" Style="{StaticResource Caption}" Margin="0,0,14,6" />
+                                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding FocusedDestination}" TextAlignment="Right" FontSize="12"
+                                               FontFamily="Cascadia Mono, Consolas" TextWrapping="Wrap" />
+                                </Grid>
+                                <Border BorderThickness="0,1,0,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}" Margin="0,8,0,8" />
+                                <TextBlock Text="File sul telefono" Style="{StaticResource Caption}" Margin="0,0,0,6" />
+                                <ItemsControl ItemsSource="{Binding FocusedTile.Files}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <DockPanel Margin="0,0,0,4">
+                                                <TextBlock DockPanel.Dock="Right" Text="{Binding Size}" Style="{StaticResource Caption}" />
+                                                <TextBlock FontFamily="Cascadia Mono, Consolas" FontSize="11.5" TextTrimming="CharacterEllipsis">
+                                                    <Run Text="{Binding Name, Mode=OneWay}" /><Run Text="  " /><Run Text="{Binding Role, Mode=OneWay}" Foreground="{DynamicResource TextFillColorSecondaryBrush}" />
+                                                </TextBlock>
+                                            </DockPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <ui:Button Content="Anteprima" Margin="0,0,6,0" Command="{Binding OpenFocusedPreviewCommand}" />
+                                    <ui:Button Content="Mostra sul PC" Command="{Binding ShowFocusedInFolderCommand}"
+                                               Visibility="{Binding FocusedCopyPath, Converter={StaticResource NotNullToVis}}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ============================ barra in basso ============================ -->
+        <Border Grid.Row="3" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                Background="{DynamicResource LayerFillColorDefaultBrush}" Padding="20,10"
+                Visibility="{Binding ShowBottomBar, Converter={StaticResource BoolToVis}}">
+            <Grid>
+                <!-- selezione e comandi -->
+                <DockPanel Visibility="{Binding ShowActions, Converter={StaticResource BoolToVis}}" MinHeight="44">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <ui:Button Content="Copia" MinWidth="96" Margin="0,0,8,0" Command="{Binding CopyCommand}" ToolTip="Copia sul PC, lascia tutto sul telefono" />
+                        <ui:Button Content="Sposta" MinWidth="96" Appearance="Primary" Command="{Binding MoveCommand}"
+                                   ToolTip="Copia sul PC, verifica, poi toglie dal telefono" />
+                    </StackPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,20,0">
+                        <TextBlock Text="Destinazione" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <Border Background="{DynamicResource ControlFillColorDefaultBrush}" BorderBrush="{DynamicResource ControlStrokeColorDefaultBrush}"
+                                BorderThickness="1" CornerRadius="4" Padding="8,4" MaxWidth="360">
+                            <TextBlock Text="{Binding DestinationText}" FontFamily="Cascadia Mono, Consolas" FontSize="12" TextTrimming="CharacterEllipsis"
+                                       ToolTip="{Binding DestinationText}" />
+                        </Border>
+                        <ui:Button Content="Cambia…" Margin="6,0,0,0" Command="{Binding ChooseDestinationCommand}" />
+                    </StackPanel>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="{Binding SelectionText}" FontWeight="SemiBold" />
+                        <TextBlock Text="{Binding SelectionDetail}" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                    </StackPanel>
+                </DockPanel>
+
+                <!-- trasferimento in corso -->
+                <StackPanel Visibility="{Binding IsTransferring, Converter={StaticResource BoolToVis}}">
+                    <DockPanel>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                            <ui:Button Content="{Binding PauseLabel}" Margin="0,0,6,0" Command="{Binding TogglePauseCommand}" />
+                            <ui:Button Content="Annulla" Command="{Binding CancelTransferCommand}" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding TransferTitle}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                    </DockPanel>
+                    <ProgressBar Margin="0,8,0,6" Height="6" Minimum="0" Maximum="1" Value="{Binding TransferFraction, Mode=OneWay}" />
+                    <DockPanel>
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding TransferCurrent}" Style="{StaticResource Caption}" FontFamily="Cascadia Mono, Consolas"
+                                   TextTrimming="CharacterEllipsis" MaxWidth="420" />
+                        <TextBlock Text="{Binding TransferDetail}" Style="{StaticResource Caption}" />
+                    </DockPanel>
+                    <TextBlock Text="{Binding TransferNotice}" Margin="0,4,0,0" FontSize="12" TextWrapping="Wrap"
+                               Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                               Visibility="{Binding TransferNotice, Converter={StaticResource NotNullToVis}}" />
+                    <TextBlock Text="{Binding TransferCounts}" Margin="0,4,0,0" FontSize="12" Foreground="{DynamicResource SystemFillColorSuccessBrush}" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ============================ conferma Sposta ============================ -->
+        <Grid Grid.RowSpan="4" Style="{StaticResource Overlay}" Visibility="{Binding ConfirmMoveOpen, Converter={StaticResource BoolToVis}}">
+            <Border Style="{StaticResource DialogCard}">
+                <StackPanel>
+                    <StackPanel Margin="24,22,24,18">
+                        <TextBlock Text="{Binding ConfirmTitle}" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,12" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" Text="{Binding ConfirmFiles}" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,6"
+                                   Text="Solo dopo la verifica vengono tolti dall'iPhone, e restano 30 giorni in “Eliminati di recente”. Se qualcosa va storto, quell'elemento rimane sul telefono." />
+                        <Border Background="{DynamicResource SystemFillColorCautionBackgroundBrush}" CornerRadius="6" Padding="12,9" Margin="0,8,0,0">
+                            <TextBlock TextWrapping="Wrap" FontSize="12.5">
+                                <Run Text="Foto di iCloud attivo?" FontWeight="SemiBold" /> <Run Text="Allora vengono tolti anche da iCloud e dagli altri tuoi dispositivi. Le copie sul PC restano." />
+                            </TextBlock>
+                        </Border>
+                        <Border Background="{DynamicResource SystemFillColorCriticalBackgroundBrush}" CornerRadius="6" Padding="12,9" Margin="0,8,0,0"
+                                Visibility="{Binding DeleteRefusedBefore, Converter={StaticResource BoolToVis}}">
+                            <TextBlock TextWrapping="Wrap" FontSize="12.5"
+                                       Text="L'ultima volta questo iPhone non ha permesso di cancellare da Windows: probabilmente verranno solo copiati." />
+                        </Border>
+                    </StackPanel>
+                    <Border Background="{DynamicResource LayerFillColorDefaultBrush}" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                            Padding="24,14" CornerRadius="0,0,8,8">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <ui:Button Content="Annulla" MinWidth="96" Margin="0,0,8,0" Command="{Binding CancelDialogCommand}" />
+                            <ui:Button Content="Sposta" MinWidth="96" Appearance="Primary" Command="{Binding ConfirmMoveCommand}" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- ============================ esito ============================ -->
+        <Grid Grid.RowSpan="4" Style="{StaticResource Overlay}" Visibility="{Binding ResultOpen, Converter={StaticResource BoolToVis}}">
+            <Border Style="{StaticResource DialogCard}">
+                <StackPanel>
+                    <StackPanel Margin="24,22,24,18">
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                            <TextBlock x:Name="ResultIconOk" Style="{StaticResource Icon}" Text="&#xE930;" FontSize="22" Margin="0,0,10,0"
+                                       Foreground="{DynamicResource SystemFillColorSuccessBrush}"
+                                       Visibility="{Binding ResultHasProblems, Converter={StaticResource InverseBoolToVis}}" />
+                            <TextBlock Style="{StaticResource Icon}" Text="&#xE7BA;" FontSize="22" Margin="0,0,10,0"
+                                       Foreground="{DynamicResource SystemFillColorCautionBrush}"
+                                       Visibility="{Binding ResultHasProblems, Converter={StaticResource BoolToVis}}" />
+                            <TextBlock Text="{Binding ResultTitle}" FontSize="20" FontWeight="SemiBold" />
+                        </StackPanel>
+                        <TextBlock Text="{Binding ResultText}" TextWrapping="Wrap" LineHeight="21" />
+                    </StackPanel>
+                    <Border Background="{DynamicResource LayerFillColorDefaultBrush}" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                            Padding="24,14" CornerRadius="0,0,8,8">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <ui:Button Content="Chiudi" MinWidth="96" Margin="0,0,8,0" Command="{Binding CancelDialogCommand}" />
+                            <ui:Button Content="Apri la cartella" Appearance="Primary" Command="{Binding OpenResultFolderCommand}" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- ============================ anteprima grande ============================ -->
+        <Grid Grid.RowSpan="4" Background="#F20B0C0E" Visibility="{Binding PreviewOpen, Converter={StaticResource BoolToVis}}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <DockPanel Margin="20,42,20,8">
+                <Button DockPanel.Dock="Right" Command="{Binding ClosePreviewCommand}" ToolTip="Chiudi (Esc)" Background="Transparent" BorderThickness="0" Cursor="Hand">
+                    <TextBlock Text="&#xE711;" FontFamily="{StaticResource IconFont}" FontSize="18" Foreground="White" Margin="6" />
+                </Button>
+                <TextBlock Text="{Binding PreviewTitle}" Foreground="White" FontSize="15" VerticalAlignment="Center" />
+            </DockPanel>
+            <Grid Grid.Row="1" Margin="70,0,70,30">
+                <Image Source="{Binding PreviewImage}" Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality" />
+                <ui:ProgressRing IsIndeterminate="True" Width="34" Height="34" Visibility="{Binding PreviewLoading, Converter={StaticResource BoolToVis}}" />
+                <StackPanel VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,10">
+                    <Border Background="#CC000000" CornerRadius="6" Padding="14,8" Visibility="{Binding PreviewMessage, Converter={StaticResource NotNullToVis}}">
+                        <TextBlock Text="{Binding PreviewMessage}" Foreground="White" TextWrapping="Wrap" MaxWidth="520" />
+                    </Border>
+                    <ui:Button Content="Riproduci il video" Appearance="Primary" Margin="0,10,0,0" HorizontalAlignment="Center"
+                               Command="{Binding PlayVideoCommand}" Visibility="{Binding PreviewIsVideo, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
+            </Grid>
+            <Button Grid.Row="1" HorizontalAlignment="Left" Margin="14,0,0,0" Command="{Binding PreviewPreviousCommand}" ToolTip="Precedente (←)"
+                    Background="#33FFFFFF" BorderThickness="0" Width="40" Height="56" Cursor="Hand">
+                <TextBlock Text="&#xE76B;" FontFamily="{StaticResource IconFont}" FontSize="18" Foreground="White" />
+            </Button>
+            <Button Grid.Row="1" HorizontalAlignment="Right" Margin="0,0,14,0" Command="{Binding PreviewNextCommand}" ToolTip="Successiva (→)"
+                    Background="#33FFFFFF" BorderThickness="0" Width="40" Height="56" Cursor="Hand">
+                <TextBlock Text="&#xE76C;" FontFamily="{StaticResource IconFont}" FontSize="18" Foreground="White" />
+            </Button>
+        </Grid>
+    </Grid>
+</ui:FluentWindow>
