@@ -46,9 +46,7 @@ public sealed class UsbmuxClient
             socket.Dispose();
             throw new UsbmuxException("Servizio Apple non raggiungibile (Dispositivi Apple installato?): " + e.Message, e);
         }
-        var stream = new NetworkStream(socket, ownsSocket: true);
-        SetTimeout(stream, ReplyTimeout);
-        return stream;
+        return new NetworkStream(socket, ownsSocket: true);
     }
 
     /// <summary>Tempo massimo di lettura e scrittura sul flusso (se lo permette): scaduto, arriva un'IOException.</summary>
@@ -57,6 +55,14 @@ public sealed class UsbmuxClient
         if (!s.CanTimeout) return;
         s.ReadTimeout = (int)t.TotalMilliseconds;
         s.WriteTimeout = (int)t.TotalMilliseconds;
+    }
+
+    /// <summary>Ogni collegamento nasce con il tempo massimo di risposta, qualunque sia il modo di aprirlo.</summary>
+    private Stream Open()
+    {
+        var s = _connect();
+        SetTimeout(s, ReplyTimeout);
+        return s;
     }
 
     private static Dictionary<string, object> Base(string type) => new()
@@ -69,7 +75,7 @@ public sealed class UsbmuxClient
 
     public IReadOnlyList<UsbmuxDevice> ListDevices()
     {
-        using var s = _connect();
+        using var s = Open();
         var reply = Exchange(s, Base("ListDevices"));
         var result = new List<UsbmuxDevice>();
         if (reply.TryGetValue("DeviceList", out var v) && v is List<object> list)
@@ -89,7 +95,7 @@ public sealed class UsbmuxClient
     /// <summary>L'abbinamento salvato dal servizio Apple quando si è toccato "Autorizza", o null se non c'è.</summary>
     public byte[]? ReadPairRecord(string udid)
     {
-        using var s = _connect();
+        using var s = Open();
         var msg = Base("ReadPairRecord");
         msg["PairRecordID"] = udid;
         var reply = Exchange(s, msg);
@@ -99,7 +105,7 @@ public sealed class UsbmuxClient
     /// <summary>Apre un canale verso una porta del telefono. Il chiamante possiede il flusso restituito.</summary>
     public Stream Connect(int deviceId, int port)
     {
-        var s = _connect();
+        var s = Open();
         try
         {
             var msg = Base("Connect");
