@@ -46,6 +46,7 @@ public static class DeviceErrors
     public const int WorkerRestarted = unchecked((int)0xA0050001);  // nostro: processo riavviato dal watchdog
     public const int SizeMismatch = unchecked((int)0xA0050002);     // nostro: arrivati meno byte del dovuto
     public const int VerifyFailed = unchecked((int)0xA0050003);     // nostro: rilettura diversa dall'impronta
+    public const int NoWpdMatch = unchecked((int)0xA0050004);       // nostro: file non ritrovato nella via di Windows per cancellarlo
 
     public static DeviceErrorKind Classify(int hr) => hr switch
     {
@@ -73,6 +74,7 @@ public static class DeviceErrors
         WorkerRestarted => "l'iPhone non rispondeva: collegamento riaperto",
         SizeMismatch => "il file è arrivato incompleto",
         VerifyFailed => "la copia sul disco non corrisponde a quella arrivata",
+        NoWpdMatch => "Windows non mostra questo file (serve per cancellare): scollega e ricollega l'iPhone sbloccato",
         0 => "errore sconosciuto",
         _ => $"errore 0x{hr:X8}",
     };

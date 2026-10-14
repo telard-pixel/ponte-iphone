@@ -75,6 +75,8 @@ public sealed class TransferReport
     public int DeleteFailed { get; set; }
     /// <summary>Il telefono ha rifiutato la cancellazione: tutto copiato, niente tolto dal telefono.</summary>
     public bool DeleteRefused { get; set; }
+    /// <summary>Motivo del primo elemento non tolto dal telefono, per spiegarlo all'utente.</summary>
+    public string? DeleteProblem { get; set; }
     public int Retries { get; set; }
     public bool Canceled { get; set; }
     /// <summary>Interruzione di tutto il trasferimento (es. disco pieno).</summary>
@@ -693,6 +695,9 @@ public sealed class TransferEngine
                 else
                 {
                     failed.Add((item, mine.Any(x => byId.TryGetValue(x.Id, out var r) && r.Refused)));
+                    var bad = mine.Where(x => x.File.Role == FileRole.Primary)
+                        .Select(x => byId.TryGetValue(x.Id, out var r) ? r : null).FirstOrDefault(r => r is { Ok: false });
+                    _report.DeleteProblem ??= bad is null ? "il telefono non ha risposto" : DeviceErrors.Describe(bad.HResult);
                 }
             }
 

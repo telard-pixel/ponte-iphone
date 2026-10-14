@@ -24,7 +24,9 @@ public static class Program
         if (args.Length >= 3 && args[0] == "--worker")
         {
             // Nessuna finestra, nessun WPF: solo il dialogo con l'iPhone.
-            return WorkerHost.RunWorkerProcess(args[1], int.Parse(args[2]), () => new WpdBackend());
+            // Prima il servizio Apple (come iTunes), WPD come riserva e per cancellare.
+            return WorkerHost.RunWorkerProcess(args[1], int.Parse(args[2]),
+                () => new SmartBackend(new PonteIPhone.Core.Apple.AppleBackend(), () => new WpdBackend()));
         }
 
         bool demo = args.Contains("--demo");

@@ -1117,14 +1117,16 @@ public sealed partial class MainViewModel : ObservableObject
             if (r.DeleteRefused)
                 lines.AppendLine("• L'iPhone non permette di cancellare da Windows: le copie sul PC ci sono, sul telefono è rimasto tutto. " +
                                  "Puoi cancellarli dall'app Foto: nella libreria hanno il bollino ✓ PC.");
-            else if (r.DeleteFailed > 0) lines.AppendLine($"• {r.DeleteFailed.ToString("N0", It)} non tolti dal telefono (le copie sul PC ci sono).");
+            else if (r.DeleteFailed > 0) lines.AppendLine($"• {r.DeleteFailed.ToString("N0", It)} non tolti dal telefono (le copie sul PC ci sono)" +
+                                                          (r.DeleteProblem is { } why ? ": " + why + "." : "."));
         }
         if (r.Mode == TransferMode.Delete)
         {
             if (r.Deleted > 0) lines.AppendLine($"✓ {r.Deleted.ToString("N0", It)} elementi eliminati dall'iPhone.");
             if (r.DeleteRefused)
                 lines.AppendLine("• L'iPhone non permette di eliminare da Windows: sul telefono è rimasto tutto. Puoi eliminarli dall'app Foto.");
-            else if (r.DeleteFailed > 0) lines.AppendLine($"• {r.DeleteFailed.ToString("N0", It)} non eliminati (sono ancora sul telefono).");
+            else if (r.DeleteFailed > 0) lines.AppendLine($"• {r.DeleteFailed.ToString("N0", It)} non eliminati, sono ancora sul telefono" +
+                                                          (r.DeleteProblem is { } why ? ": " + why + "." : "."));
             if (r.Canceled) lines.AppendLine("Eliminazione annullata: quelli non ancora eliminati sono rimasti sul telefono.");
             var deleteTitle = r.Canceled ? "Eliminazione annullata"
                 : r.DeleteRefused ? "L'iPhone non ha permesso di eliminare"
