@@ -147,6 +147,35 @@ public sealed class AppleTests : IDisposable
     }
 
     [Fact]
+    public void SilentPhoneFallsBackToWindowsInsteadOfHanging()
+    {
+        var saved = UsbmuxClient.ReplyTimeout;
+        UsbmuxClient.ReplyTimeout = TimeSpan.FromSeconds(1);
+        try
+        {
+            _phone.HangLockdown = true;
+            var fake = new FakeBackend();
+            fake.Add("202610_a", "IMG_0001.HEIC", 1000);
+            using var backend = new SmartBackend(new AppleBackend(_phone.Client()), () => fake);
+            var dev = Assert.Single(backend.ListDevices());
+
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var opened = backend.Open(dev.Id);
+            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"aperto in {clock.Elapsed}");
+            Assert.True(opened.Ready);
+            Assert.Contains(opened.Notes!, n => n.Contains("Canale Apple non riuscito") && n.Contains("sessione cifrata"));
+
+            // Al controllo successivo si va diretti su Windows, senza riaspettare il telefono.
+            backend.Open(dev.Id);
+            Assert.Equal(1, _phone.LockdownConnections);
+        }
+        finally
+        {
+            UsbmuxClient.ReplyTimeout = saved;
+        }
+    }
+
+    [Fact]
     public void LockedPhoneIsReportedAsLocked()
     {
         _phone.Locked = true;

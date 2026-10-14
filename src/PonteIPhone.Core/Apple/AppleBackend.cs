@@ -68,6 +68,7 @@ public sealed partial class AppleBackend : IDeviceBackend
             throw new AppleUnavailableException("nessun abbinamento con questo PC leggibile dal servizio Apple");
         }
 
+        string step = "collegamento al telefono";
         LockdownClient lockdown;
         try
         {
@@ -75,11 +76,13 @@ public sealed partial class AppleBackend : IDeviceBackend
         }
         catch (UsbmuxException e)
         {
-            throw new DeviceException("iPhone non raggiungibile: " + e.Message, DeviceErrors.DeviceNotConnected, e);
+            // Il servizio vede il telefono ma non riesce a parlargli: forse la via di Windows sì.
+            throw new AppleUnavailableException("il servizio Apple non raggiunge il telefono: " + e.Message, e);
         }
 
         try
         {
+            step = "sessione cifrata";
             try
             {
                 lockdown.StartSession(pair);
@@ -89,6 +92,7 @@ public sealed partial class AppleBackend : IDeviceBackend
                 throw new AppleUnavailableException("abbinamento non accettato dal telefono: " + e.Message);
             }
 
+            step = "dati del telefono";
             var values = SafeValues(lockdown);
             info = new DeviceInfo(deviceId,
                 values.GetString("DeviceName") ?? "",
@@ -98,6 +102,7 @@ public sealed partial class AppleBackend : IDeviceBackend
                 values.GetString("ProductVersion") ?? "",
                 dev.ConnectionType);
 
+            step = "apertura di AFC";
             (int Port, bool Ssl) service;
             try
             {
@@ -123,15 +128,20 @@ public sealed partial class AppleBackend : IDeviceBackend
                 return new OpenResult(info, null, OpenState.LockedOrNotTrusted, _notes.ToList());
             }
 
+            step = "collegamento ad AFC";
             _afc = ConnectAfc(dev.DeviceId, service, pair);
         }
         catch (Exception e) when (e is IOException or EndOfStreamException or FormatException or System.Xml.XmlException)
         {
-            throw new DeviceException("Dialogo con l'iPhone interrotto: " + e.Message, DeviceErrors.GenFailure, e);
+            throw new DeviceException($"Il telefono non risponde ({step}): {e.Message}", DeviceErrors.GenFailure, e);
+        }
+        catch (LockdownException e)
+        {
+            throw new AppleUnavailableException($"{step}: {e.Message}", e);
         }
         catch (UsbmuxException e)
         {
-            throw new DeviceException("iPhone non raggiungibile: " + e.Message, DeviceErrors.DeviceNotConnected, e);
+            throw new AppleUnavailableException($"il servizio Apple non raggiunge il telefono ({step}): {e.Message}", e);
         }
         finally
         {
@@ -216,6 +226,7 @@ public sealed partial class AppleBackend : IDeviceBackend
     {
         _afcEncrypted = service.Ssl;
         var raw = _mux.Connect(deviceId, service.Port);
+        UsbmuxClient.SetTimeout(raw, UsbmuxClient.DataTimeout);
         if (!service.Ssl) return new AfcClient(raw);
         try
         {

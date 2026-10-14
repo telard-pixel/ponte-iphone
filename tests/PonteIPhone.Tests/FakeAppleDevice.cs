@@ -29,6 +29,9 @@ public sealed class FakeAppleDevice : IDisposable
     public bool Locked { get; set; }
     public bool ServePairRecord { get; set; } = true;
     public bool Usb { get; set; } = true;
+    /// <summary>Il telefono accetta il collegamento ma non risponde mai (come un iPhone che si pianta).</summary>
+    public bool HangLockdown { get; set; }
+    public int LockdownConnections;
     public bool Wifi { get; set; }
     public int SessionsWithClientCert;
 
@@ -124,7 +127,12 @@ public sealed class FakeAppleDevice : IDisposable
                 bool ok = ((id == DeviceId && Usb) || (id == WifiDeviceId && Wifi)) && port is LockdownClient.Port or AfcPort;
                 MuxReply(s, tag, new Dictionary<string, object> { ["MessageType"] = "Result", ["Number"] = ok ? 0L : 3L });
                 if (!ok) return;
-                if (port == LockdownClient.Port) ServeLockdown(s);
+                if (port == LockdownClient.Port)
+                {
+                    Interlocked.Increment(ref LockdownConnections);
+                    if (HangLockdown) { _stop.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(30)); return; }
+                    ServeLockdown(s);
+                }
                 else ServeAfc(s);
                 break;
             }

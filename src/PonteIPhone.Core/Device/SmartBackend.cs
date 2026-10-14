@@ -21,6 +21,12 @@ public sealed class SmartBackend : IDeviceBackend
     /// <summary>File elencati con il servizio Apple (percorso → file), per ritrovarli in WPD quando si cancella.</summary>
     private readonly Dictionary<string, RemoteFile> _known = new(StringComparer.Ordinal);
     private Dictionary<string, List<RemoteFile>>? _wpdFiles;
+    /// <summary>
+    /// Il canale Apple non è riuscito per questo telefono: per un po' si va diretti su WPD, invece di
+    /// riprovare (e aspettare i tempi massimi) a ogni controllo dell'app.
+    /// </summary>
+    private readonly Dictionary<string, (DateTime Until, string Why)> _appleFailed = new(StringComparer.Ordinal);
+    public static TimeSpan AppleRetryAfter { get; set; } = TimeSpan.FromMinutes(2);
 
     public SmartBackend(IDeviceBackend apple, Func<IDeviceBackend> wpdFactory)
     {
@@ -59,11 +65,16 @@ public sealed class SmartBackend : IDeviceBackend
             return r with { Notes = [.. (r.Notes ?? Array.Empty<string>()), "Canale: Windows (WPD), " + why] };
         }
 
+        if (_appleFailed.TryGetValue(deviceId, out var failed) && DateTime.UtcNow < failed.Until)
+            return OpenWithWpd(deviceId, failed.Why, null);
+
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             var r = _apple.Open(deviceId);
             _active = _apple;
-            return r;
+            _appleFailed.Remove(deviceId);
+            return r with { Notes = [.. (r.Notes ?? Array.Empty<string>()), $"Aperto in {clock.Elapsed.TotalSeconds:0.0} s"] };
         }
         catch (DeviceException e) when (e.Kind == DeviceErrorKind.Gone)
         {
@@ -77,18 +88,25 @@ public sealed class SmartBackend : IDeviceBackend
         catch (Exception e) when (e is not OperationCanceledException)
         {
             // Il servizio Apple c'è ma non va per questo telefono: si prova la via di Windows.
-            var udid = deviceId[AppleBackend.IdPrefix.Length..];
-            var dev = Wpd.ListDevices().FirstOrDefault()
-                      ?? throw new DeviceException("Canale Apple non riuscito (" + e.Message + ") e Windows non vede l'iPhone", DeviceErrors.NotReady, e);
-            _active = Wpd;
-            var r = Wpd.Open(dev.Id);
-            // Stesso ID e stessa identità dell'elenco: così l'app lo riconosce come lo stesso telefono.
-            return r with
-            {
-                Device = r.Device with { Id = deviceId, Serial = udid },
-                Notes = [.. (r.Notes ?? Array.Empty<string>()), "Canale Apple non riuscito: " + e.Message, "Canale: Windows (WPD)"],
-            };
+            var why = $"{e.Message} (dopo {clock.Elapsed.TotalSeconds:0.0} s)";
+            _appleFailed[deviceId] = (DateTime.UtcNow + AppleRetryAfter, why);
+            return OpenWithWpd(deviceId, why, e);
         }
+    }
+
+    private OpenResult OpenWithWpd(string deviceId, string appleProblem, Exception? inner)
+    {
+        var udid = deviceId[AppleBackend.IdPrefix.Length..];
+        var dev = Wpd.ListDevices().FirstOrDefault()
+                  ?? throw new DeviceException("Canale Apple non riuscito (" + appleProblem + ") e Windows non vede l'iPhone", DeviceErrors.NotReady, inner);
+        _active = Wpd;
+        var r = Wpd.Open(dev.Id);
+        // Stesso ID e stessa identità dell'elenco: così l'app lo riconosce come lo stesso telefono.
+        return r with
+        {
+            Device = r.Device with { Id = deviceId, Serial = udid },
+            Notes = [.. (r.Notes ?? Array.Empty<string>()), "Canale Apple non riuscito: " + appleProblem, "Canale: Windows (WPD)"],
+        };
     }
 
     private bool IsWifiOnly(string deviceId)

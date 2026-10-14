@@ -17,6 +17,13 @@ public sealed class UsbmuxException(string message, Exception? inner = null) : E
 public sealed class UsbmuxClient
 {
     public const int WindowsPort = 27015;
+    /// <summary>
+    /// Tempo massimo per una risposta del servizio o del telefono. Senza, un telefono che non risponde
+    /// lascerebbe il processo appeso finché il controllo dell'app non lo chiude, e la riserva WPD non partirebbe mai.
+    /// </summary>
+    public static TimeSpan ReplyTimeout { get; set; } = TimeSpan.FromSeconds(8);
+    /// <summary>Per i dati dei file: un blocco da 1 MB in Wi-Fi può metterci qualche secondo.</summary>
+    public static readonly TimeSpan DataTimeout = TimeSpan.FromSeconds(25);
     private const int MessagePlist = 8;
     private readonly Func<Stream> _connect;
     private int _tag;
@@ -39,7 +46,17 @@ public sealed class UsbmuxClient
             socket.Dispose();
             throw new UsbmuxException("Servizio Apple non raggiungibile (Dispositivi Apple installato?): " + e.Message, e);
         }
-        return new NetworkStream(socket, ownsSocket: true);
+        var stream = new NetworkStream(socket, ownsSocket: true);
+        SetTimeout(stream, ReplyTimeout);
+        return stream;
+    }
+
+    /// <summary>Tempo massimo di lettura e scrittura sul flusso (se lo permette): scaduto, arriva un'IOException.</summary>
+    public static void SetTimeout(Stream s, TimeSpan t)
+    {
+        if (!s.CanTimeout) return;
+        s.ReadTimeout = (int)t.TotalMilliseconds;
+        s.WriteTimeout = (int)t.TotalMilliseconds;
     }
 
     private static Dictionary<string, object> Base(string type) => new()
