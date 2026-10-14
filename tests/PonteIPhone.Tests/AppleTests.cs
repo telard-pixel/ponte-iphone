@@ -111,68 +111,120 @@ public sealed class AppleTests : IDisposable
     }
 
     [Fact]
-    public void CableIsPreferredAndWifiWorksAlone()
+    public void WithoutPairRecordAsksToUnlockAndTrust()
     {
-        _phone.Wifi = true;
-        using var backend = new AppleBackend(_phone.Client());
-        var both = Assert.Single(backend.ListDevices());
-        Assert.False(both.IsWifi);
-        Assert.False(backend.Open(both.Id).Device.IsWifi);
-        Assert.Equal(0, _phone.WifiConnections);
-
-        _phone.Usb = false; // cavo staccato
-        var wifi = Assert.Single(backend.ListDevices());
-        Assert.Equal(both.Id, wifi.Id); // stesso telefono per l'app
-        Assert.True(wifi.IsWifi);
-        var opened = backend.Open(wifi.Id);
-        Assert.Equal(OpenState.Ready, opened.State);
-        Assert.True(opened.Device.IsWifi);
-        Assert.True(_phone.WifiConnections > 0);
-        var res = backend.Download("/DCIM/100APPLE/IMG_0002.JPG", Path.Combine(_dir, "w.part"), _ => { }, CancellationToken.None);
-        Assert.Equal(_phone.Files["/DCIM/100APPLE/IMG_0002.JPG"].Length, res.Bytes);
-    }
-
-    [Fact]
-    public void WifiFailureDoesNotFallBackToWindows()
-    {
-        _phone.Usb = false;
-        _phone.Wifi = true;
         _phone.ServePairRecord = false;
         using var backend = new SmartBackend(new AppleBackend(_phone.Client()), () => new FakeBackend());
         var dev = Assert.Single(backend.ListDevices());
 
-        // Windows vedrebbe un altro telefono (quello finto col cavo): non va scambiato per questo.
-        var e = Assert.Throws<DeviceException>(() => backend.Open(dev.Id));
-        Assert.Contains("Wi-Fi", e.Message);
+        var opened = backend.Open(dev.Id);
+
+        Assert.Equal(OpenState.LockedOrNotTrusted, opened.State);
+        Assert.Equal(dev.Key, opened.Device.Key);
     }
 
     [Fact]
-    public void SilentPhoneFallsBackToWindowsInsteadOfHanging()
+    public void WifiOnlyPhoneIsIgnored()
+    {
+        _phone.Usb = false;
+        _phone.Wifi = true;
+        using var backend = new AppleBackend(_phone.Client());
+        Assert.Empty(backend.ListDevices());
+    }
+
+    [Fact]
+    public void SilentPhoneDoesNotHang()
     {
         var saved = UsbmuxClient.ReplyTimeout;
         UsbmuxClient.ReplyTimeout = TimeSpan.FromSeconds(1);
         try
         {
             _phone.HangLockdown = true;
-            var fake = new FakeBackend();
-            fake.Add("202610_a", "IMG_0001.HEIC", 1000);
-            using var backend = new SmartBackend(new AppleBackend(_phone.Client()), () => fake);
+            using var backend = new SmartBackend(new AppleBackend(_phone.Client()), () => new FakeBackend());
             var dev = Assert.Single(backend.ListDevices());
-
             var clock = System.Diagnostics.Stopwatch.StartNew();
-            var opened = backend.Open(dev.Id);
-            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"aperto in {clock.Elapsed}");
-            Assert.True(opened.Ready);
-            Assert.Contains(opened.Notes!, n => n.Contains("Canale Apple non riuscito") && n.Contains("sessione cifrata"));
-
-            // Al controllo successivo si va diretti su Windows, senza riaspettare il telefono.
-            backend.Open(dev.Id);
-            Assert.Equal(1, _phone.LockdownConnections);
+            var e = Assert.Throws<DeviceException>(() => backend.Open(dev.Id));
+            Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10), $"risposta dopo {clock.Elapsed}");
+            Assert.Contains("sessione cifrata", e.Message);
+            Assert.Equal(DeviceErrorKind.Transient, e.Kind);
         }
         finally
         {
             UsbmuxClient.ReplyTimeout = saved;
         }
+    }
+
+    [Fact]
+    public void ConnectionDropIsTransientAndTheNextCallReopens()
+    {
+        using var backend = new AppleBackend(_phone.Client());
+        _phone.DropAfcAfter = 3; // il primo collegamento AFC cade presto
+        backend.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid);
+        var e = Assert.ThrowsAny<DeviceException>(() =>
+            backend.Download("/DCIM/100APPLE/IMG_0001.MOV", Path.Combine(_dir, "d1.part"), _ => { }, CancellationToken.None));
+        Assert.Equal(DeviceErrorKind.Transient, e.Kind); // telefono ancora lì: non "scollegato"
+
+        var res = backend.Download("/DCIM/100APPLE/IMG_0001.MOV", Path.Combine(_dir, "d2.part"), _ => { }, CancellationToken.None);
+        Assert.Equal(_phone.Files["/DCIM/100APPLE/IMG_0001.MOV"].Length, res.Bytes);
+    }
+
+    [Fact]
+    public async Task DeleteWorksFromAFreshProcessWithoutTheList()
+    {
+        // Come nell'app: le cancellazioni hanno un processo tutto loro, che apre il telefono ma non lo elenca.
+        var fake = new FakeBackend();
+        fake.Add("202610_a", "IMG_0002.JPG", 90_000, content: _phone.Files["/DCIM/100APPLE/IMG_0002.JPG"]);
+        var browse = new List<RemoteFile>();
+        using (var first = new AppleBackend(_phone.Client()))
+        {
+            first.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid);
+            first.Enumerate(browse.AddRange, CancellationToken.None);
+        }
+        var item = Assert.Single(MediaGrouper.Group(browse), i => i.BaseName == "IMG_0002");
+
+        using var fresh = new SmartBackend(new AppleBackend(_phone.Client()), () => fake);
+        await using var conn = new InProcessConnection(fresh);
+        var opened = await conn.OpenAsync(AppleBackend.IdPrefix + FakeAppleDevice.Udid, CancellationToken.None);
+        using var registry = new CopyRegistry(Path.Combine(_dir, "copie.db"));
+        var report = await new TransferEngine(conn, opened.Device, registry, converter: null)
+            .DeleteAsync([item], new TransferOptions { DestinationRoot = _dir }, null, CancellationToken.None);
+
+        Assert.Equal(1, report.Deleted);
+        Assert.Equal(["IMG_0002.JPG"], fake.Deleted);
+    }
+
+    [Fact]
+    public async Task DeleteStopsAtOnceWhenWindowsDoesNotShowThePhotos()
+    {
+        var fake = new FakeBackend { Locked = true }; // Windows vede il telefono ma con la memoria vuota
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client()), () => fake);
+        await using var conn = new InProcessConnection(backend);
+        var opened = await conn.OpenAsync(AppleBackend.IdPrefix + FakeAppleDevice.Udid, CancellationToken.None);
+        var files = new List<RemoteFile>();
+        await conn.EnumerateAsync(files.AddRange, CancellationToken.None);
+        using var registry = new CopyRegistry(Path.Combine(_dir, "copie.db"));
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var report = await new TransferEngine(conn, opened.Device, registry, converter: null)
+            .DeleteAsync(MediaGrouper.Group(files), new TransferOptions { DestinationRoot = _dir }, null, CancellationToken.None);
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10));
+        Assert.Equal(0, report.Deleted);
+        Assert.Equal(2, report.DeleteFailed);
+        Assert.Contains("Windows non mostra", report.DeleteProblem);
+        Assert.Empty(fake.Deleted);
+    }
+
+    [Fact]
+    public void TheRightPhoneIsChosenForDeleting()
+    {
+        var a = new DeviceInfo(@"\\?\usb#vid_05ac&pid_12a8&mi_00#00008110001a2b3c4d5e6f70#{6ac27878}", "", "Apple", "", "", "");
+        var b = new DeviceInfo(@"\\?\usb#vid_05ac&pid_12a8&mi_00#00008030000111222333444f#{6ac27878}", "", "Apple", "", "", "");
+        Assert.Same(a, SmartBackend.PickWpdDevice([a, b], FakeAppleDevice.Udid, 2));
+        Assert.Null(SmartBackend.PickWpdDevice([b], FakeAppleDevice.Udid, 2)); // l'altro telefono: mai
+        var unknown = new DeviceInfo("wpd-1", "", "Apple", "", "", "");
+        Assert.Same(unknown, SmartBackend.PickWpdDevice([unknown], FakeAppleDevice.Udid, 1));
+        Assert.Null(SmartBackend.PickWpdDevice([unknown, b], FakeAppleDevice.Udid, 2));
     }
 
     [Fact]
@@ -217,23 +269,6 @@ public sealed class AppleTests : IDisposable
         Assert.Empty(report.Failed);
         Assert.Equal(_phone.Files["/DCIM/100APPLE/IMG_0002.JPG"], File.ReadAllBytes(Path.Combine(_dir, "Foto", "IMG_0002.JPG")));
         Assert.True(File.Exists(Path.Combine(_dir, "Foto", "IMG_E0002.JPG")));
-    }
-
-    [Fact]
-    public void WithoutPairRecordFallsBackToWindowsKeepingTheSameIdentity()
-    {
-        _phone.ServePairRecord = false;
-        var fake = new FakeBackend();
-        fake.Add("202610_a", "IMG_0001.HEIC", 1000);
-        using var backend = new SmartBackend(new AppleBackend(_phone.Client()), () => fake);
-        var dev = Assert.Single(backend.ListDevices());
-
-        var opened = backend.Open(dev.Id);
-
-        Assert.True(opened.Ready);
-        Assert.Equal(dev.Id, opened.Device.Id);
-        Assert.Equal(dev.Key, opened.Device.Key);
-        Assert.Contains(opened.Notes!, n => n.Contains("Canale: Windows"));
     }
 
     [Fact]

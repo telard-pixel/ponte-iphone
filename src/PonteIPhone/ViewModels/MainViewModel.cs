@@ -72,9 +72,23 @@ public sealed partial class MainViewModel : ObservableObject
         _updates = new UpdateService(log);
         _tileSize = settings.ThumbnailSize;
         _newestFirst = settings.NewestFirst;
-        _showInspector = settings.ShowInspector;
+        _showInspector = false; // pannello dettagli tolto: l'anteprima si apre col doppio clic
+        // App semplice (14/10): queste scelte non sono più impostazioni, valgono sempre così.
+        settings.ByYearMonth = true;
+        settings.SkipAlreadyCopied = true;
+        settings.KeepHeicOriginal = false;
+        settings.IncludeEdited = true;
+        settings.IncludeSidecars = false;
+        settings.ConfirmMove = true;
+        settings.KeepAwake = true;
+        settings.AutoUpdate = true;
         _poll = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-        _poll.Tick += async (_, _) => await PollAsync();
+        _poll.Tick += async (_, _) =>
+        {
+            // Un errore imprevisto nel controllo periodico non deve aprire una finestra d'errore ogni 3 secondi.
+            try { await PollAsync(); }
+            catch (Exception e) { _log.Error("Controllo periodico", e); }
+        };
     }
 
     // ================================================================== stato generale
@@ -123,7 +137,6 @@ public sealed partial class MainViewModel : ObservableObject
 
     partial void OnDeviceChanged(DeviceInfo? value)
     {
-        OnPropertyChanged(nameof(IsWifi));
         OnPropertyChanged(nameof(DeviceName));
         OnPropertyChanged(nameof(DeviceModel));
         OnPropertyChanged(nameof(DeviceStatus));
@@ -148,11 +161,10 @@ public sealed partial class MainViewModel : ObservableObject
         AppScreen.Locked => "Bloccato: sbloccalo",
         AppScreen.NoCameraRoll => "Collegato, senza foto",
         AppScreen.Loading => "Lettura in corso…",
-        _ => IsTransferring ? "Trasferimento in corso" : IsWifi ? "Collegato via Wi-Fi" : "Collegato via USB",
+        _ => !IsTransferring ? "Collegato" : _transferMode == TransferMode.Delete ? "Eliminazione in corso" : "Trasferimento in corso",
     };
 
-    /// <summary>Collegato col servizio Apple in Wi-Fi: si copia, ma per cancellare serve il cavo.</summary>
-    public bool IsWifi => Device?.IsWifi == true;
+    private TransferMode _transferMode;
 
     public bool HasStorage => Storage is { Capacity: > 0 };
     public string StorageText => Storage is { Capacity: > 0 } s
@@ -185,8 +197,7 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task PollAsync()
     {
         // Senza telefono (o bloccato) si ricontrolla ogni 3 secondi: le notifiche di Windows a volte non arrivano.
-        // In Wi-Fi Windows non avvisa quando il telefono se ne va (o torna sul cavo): si controlla anche con la libreria aperta.
-        if (IsTransferring || (Screen is AppScreen.Library or AppScreen.Loading && !IsWifi)) return;
+        if (IsTransferring || Screen is AppScreen.Library or AppScreen.Loading) return;
         await RefreshDevicesAsync();
     }
 
@@ -196,7 +207,6 @@ public sealed partial class MainViewModel : ObservableObject
         if (!await _deviceLock.WaitAsync(0)) return;
         try
         {
-            RecycleIfStuckLocked();
             IReadOnlyList<DeviceInfo> list;
             try
             {
@@ -210,18 +220,7 @@ public sealed partial class MainViewModel : ObservableObject
 
             if (Device is { } current && Screen is AppScreen.Library or AppScreen.Loading)
             {
-                if (list.FirstOrDefault(d => d.Id == current.Id) is { } same)
-                {
-                    // Cavo staccato con il Wi-Fi attivo (o il contrario): stesso telefono, altra strada.
-                    if (same.Connection != current.Connection && same.Connection.Length > 0)
-                    {
-                        // Il collegamento vecchio è caduto con il cavo: si riapre dalla strada nuova.
-                        _log.Info($"iPhone ora collegato {(same.IsWifi ? "in Wi-Fi" : "col cavo")}: riapro");
-                        CloseLibrary();
-                        await OpenDeviceAsync(same);
-                    }
-                    return;
-                }
+                if (list.Any(d => d.Id == current.Id)) return;
                 _log.Info("iPhone scollegato");
                 CloseLibrary();
                 Screen = AppScreen.NoDevice;
@@ -282,7 +281,6 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     private DateTime? _lockedSince;
-    private DateTime _lastRecycle = DateTime.MinValue;
 
     /// <summary>Da quanto il telefono è collegato ma senza foto visibili (bloccato, non autorizzato, driver).</summary>
     [ObservableProperty] private bool _lockedForAWhile;
@@ -292,22 +290,6 @@ public sealed partial class MainViewModel : ObservableObject
         if (!locked) _lockedSince = null;
         else _lockedSince ??= DateTime.UtcNow;
         LockedForAWhile = _lockedSince is { } t && DateTime.UtcNow - t > TimeSpan.FromSeconds(20);
-    }
-
-    /// <summary>
-    /// Telefono già collegato all'avvio, o sbloccato dopo: a volte Windows continua a far vedere
-    /// la memoria vuota alla stessa sessione. Ogni 15 secondi di "bloccato" si riparte con un processo nuovo.
-    /// </summary>
-    private void RecycleIfStuckLocked()
-    {
-        if (_lockedSince is not { } since || _browse is not WorkerConnection w) return;
-        if (Screen is not (AppScreen.Locked or AppScreen.NoCameraRoll)) return;
-        var now = DateTime.UtcNow;
-        if (now - since < TimeSpan.FromSeconds(15) || now - _lastRecycle < TimeSpan.FromSeconds(15)) return;
-        _lastRecycle = now;
-        _thumbs?.Dispose();
-        _thumbs = null;
-        w.Restart("l'iPhone risulta bloccato da " + (int)(now - since).TotalSeconds + " s");
     }
 
     private void CloseLibrary()
@@ -342,7 +324,7 @@ public sealed partial class MainViewModel : ObservableObject
     private Stopwatch? _loadClock;
 
     /// <summary>Legge l'elenco dal telefono; la griglia si aggiorna ogni secondo e mezzo mentre arriva.</summary>
-    private async Task LoadLibraryAsync()
+    private async Task LoadLibraryAsync(int attempt = 1)
     {
         _loadCts?.Cancel();
         _loadCts = new CancellationTokenSource();
@@ -398,10 +380,18 @@ public sealed partial class MainViewModel : ObservableObject
                 CloseLibrary();
                 Screen = AppScreen.NoDevice;
             }
+            else if (attempt < 3 && !ct.IsCancellationRequested)
+            {
+                // Telefono lento o bloccato un attimo: il collegamento si riapre da solo, si rilegge.
+                LoadingText = "Il telefono non risponde: riprovo…";
+                try { await Task.Delay(TimeSpan.FromSeconds(2 * attempt), ct); }
+                catch (OperationCanceledException) { return; }
+                await LoadLibraryAsync(attempt + 1);
+            }
             else
             {
                 Screen = _items.Count > 0 ? AppScreen.Library : AppScreen.Locked;
-                ShowBanner($"Lettura interrotta: {DeviceErrors.Describe(e.Code)}. Sblocca l'iPhone e premi Aggiorna.", error: true);
+                ShowBanner("Il telefono non risponde. Sbloccalo e premi Aggiorna (in alto a destra).", error: true);
             }
         }
     }
@@ -672,7 +662,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _focusedImageLoading;
     [ObservableProperty] private bool _showInspector;
 
-    public bool ShowInspectorPanel => ShowInspector && ShowLibrary;
+    public bool ShowInspectorPanel => false;
 
     partial void OnShowInspectorChanged(bool value)
     {
@@ -986,6 +976,7 @@ public sealed partial class MainViewModel : ObservableObject
         var items = Selected.Select(t => t.Item).OrderBy(i => i.Date ?? DateTime.MinValue).ToList();
         if (items.Count == 0) return;
 
+        _transferMode = mode;
         IsTransferring = true;
         _transferCts = new CancellationTokenSource();
         _pause = new PauseController();
@@ -1018,9 +1009,14 @@ public sealed partial class MainViewModel : ObservableObject
                 var opened = await conn.OpenAsync(Device.Id, _transferCts.Token);
                 if (!opened.Ready) throw new DeviceException("L'iPhone è bloccato: sbloccalo e riprova", DeviceErrors.NotReady);
             }
+            catch (OperationCanceledException)
+            {
+                return; // annullato mentre si apriva il telefono
+            }
             catch (DeviceException e)
             {
-                ShowResult(mode == TransferMode.Delete ? "Eliminazione non partita" : "Trasferimento non partito", e.Message, problems: true, folder: null);
+                ShowResult(mode == TransferMode.Delete ? "Eliminazione non partita" : "Trasferimento non partito",
+                    e.Kind == DeviceErrorKind.Gone ? "L'iPhone non è collegato." : "L'iPhone non risponde: sbloccalo e riprova.", problems: true, folder: null);
                 return;
             }
 

@@ -4,31 +4,27 @@ using PonteIPhone.Core.Model;
 namespace PonteIPhone.Core.Device;
 
 /// <summary>
-/// Sceglie la via per parlare con l'iPhone:
-/// 1. il servizio Apple (<see cref="AppleBackend"/>): legge anche se Windows ha visto il telefono
-///    bloccato o "vuoto", e non perde il filo quando l'iPhone si blocca e si sblocca;
-/// 2. se non c'è (Dispositivi Apple non installato, abbinamento non leggibile…), WPD come prima.
-/// Le cancellazioni passano sempre da WPD, la via che usa l'app Foto: con AFC si toglierebbero i file
-/// ma non le foto dalla libreria del telefono. I file si ritrovano in WPD per nome e dimensione.
+/// Il telefono come lo usa l'app (decisione del 14/10, dopo i rapporti veri):
+/// - per guardare e copiare solo il servizio Apple (<see cref="AppleBackend"/>), che sugli iPhone veri
+///   legge migliaia di file in pochi secondi, mentre WPD si piantava o vedeva la memoria vuota;
+/// - per cancellare WPD, l'unica via che toglie le foto anche dall'app Foto (con AFC i file sparirebbero
+///   ma le foto resterebbero nella libreria del telefono). WPD si apre solo qui, sul telefono giusto
+///   (stesso UDID), e i file si ritrovano per nome, dimensione e data; nel dubbio non si cancella niente.
 /// </summary>
 public sealed class SmartBackend : IDeviceBackend
 {
-    private readonly IDeviceBackend _apple;
+    private readonly AppleBackend _apple;
     private readonly Func<IDeviceBackend> _wpdFactory;
     private IDeviceBackend? _wpd;
-    private IDeviceBackend? _active;
-    private string? _appleUnavailable;
-    /// <summary>File elencati con il servizio Apple (percorso → file), per ritrovarli in WPD quando si cancella.</summary>
+    /// <summary>File già elencati (percorso → file): evitano di richiedere i dati al telefono quando si cancella.</summary>
     private readonly Dictionary<string, RemoteFile> _known = new(StringComparer.Ordinal);
+    /// <summary>Elenco WPD per nome, letto una volta per telefono e tenuto finché vive questo processo.</summary>
     private Dictionary<string, List<RemoteFile>>? _wpdFiles;
-    /// <summary>
-    /// Il canale Apple non è riuscito per questo telefono: per un po' si va diretti su WPD, invece di
-    /// riprovare (e aspettare i tempi massimi) a ogni controllo dell'app.
-    /// </summary>
-    private readonly Dictionary<string, (DateTime Until, string Why)> _appleFailed = new(StringComparer.Ordinal);
-    public static TimeSpan AppleRetryAfter { get; set; } = TimeSpan.FromMinutes(2);
+    private string? _wpdFilesFor;
+    /// <summary>Perché WPD non è utilizzabile (per non riprovare a ogni gruppo di file).</summary>
+    private int _wpdProblem;
 
-    public SmartBackend(IDeviceBackend apple, Func<IDeviceBackend> wpdFactory)
+    public SmartBackend(AppleBackend apple, Func<IDeviceBackend> wpdFactory)
     {
         _apple = apple;
         _wpdFactory = wpdFactory;
@@ -36,119 +32,51 @@ public sealed class SmartBackend : IDeviceBackend
 
     private IDeviceBackend Wpd => _wpd ??= _wpdFactory();
 
-    private bool AppleActive => _active is not null && ReferenceEquals(_active, _apple);
-
+    /// <summary>Servizio Apple assente (Dispositivi Apple non installato): nessun telefono, l'app lo spiega.</summary>
     public IReadOnlyList<DeviceInfo> ListDevices()
     {
-        try
-        {
-            var list = _apple.ListDevices();
-            _appleUnavailable = null;
-            if (list.Count > 0) return list;
-        }
-        catch (Exception e) when (e is not OperationCanceledException)
-        {
-            _appleUnavailable = e.Message;
-        }
-        return Wpd.ListDevices();
+        try { return _apple.ListDevices(); }
+        catch (UsbmuxException) { return []; }
     }
 
     public OpenResult Open(string deviceId)
     {
-        _known.Clear();
-        _wpdFiles = null;
-        if (!deviceId.StartsWith(AppleBackend.IdPrefix, StringComparison.Ordinal))
-        {
-            _active = Wpd;
-            var r = Wpd.Open(deviceId);
-            var why = _appleUnavailable is null ? "servizio Apple: nessun iPhone" : "servizio Apple non disponibile: " + _appleUnavailable;
-            return r with { Notes = [.. (r.Notes ?? Array.Empty<string>()), "Canale: Windows (WPD), " + why] };
-        }
-
-        if (_appleFailed.TryGetValue(deviceId, out var failed) && DateTime.UtcNow < failed.Until)
-            return OpenWithWpd(deviceId, failed.Why, null);
-
-        var clock = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            var r = _apple.Open(deviceId);
-            _active = _apple;
-            _appleFailed.Remove(deviceId);
-            return r with { Notes = [.. (r.Notes ?? Array.Empty<string>()), $"Aperto in {clock.Elapsed.TotalSeconds:0.0} s"] };
+            return _apple.Open(deviceId);
         }
-        catch (DeviceException e) when (e.Kind == DeviceErrorKind.Gone)
+        catch (AppleUnavailableException e)
         {
-            throw;
-        }
-        catch (Exception e) when (e is not OperationCanceledException && IsWifiOnly(deviceId))
-        {
-            // In Wi-Fi Windows non vede il telefono: non c'è una via di riserva.
-            throw new DeviceException("Collegamento in Wi-Fi non riuscito (" + e.Message + "): prova col cavo", DeviceErrors.NotReady, e);
-        }
-        catch (Exception e) when (e is not OperationCanceledException)
-        {
-            // Il servizio Apple c'è ma non va per questo telefono: si prova la via di Windows.
-            var why = $"{e.Message} (dopo {clock.Elapsed.TotalSeconds:0.0} s)";
-            _appleFailed[deviceId] = (DateTime.UtcNow + AppleRetryAfter, why);
-            return OpenWithWpd(deviceId, why, e);
+            // Di solito: "Autorizza" non ancora toccato su questo PC. L'app mostra "Sblocca l'iPhone".
+            var udid = deviceId.StartsWith(AppleBackend.IdPrefix, StringComparison.Ordinal) ? deviceId[AppleBackend.IdPrefix.Length..] : deviceId;
+            return new OpenResult(new DeviceInfo(deviceId, "", "Apple Inc.", "iPhone", udid, ""), null, OpenState.LockedOrNotTrusted,
+                ["Canale Apple non utilizzabile: " + e.Message]);
         }
     }
 
-    private OpenResult OpenWithWpd(string deviceId, string appleProblem, Exception? inner)
-    {
-        var udid = deviceId[AppleBackend.IdPrefix.Length..];
-        var dev = Wpd.ListDevices().FirstOrDefault()
-                  ?? throw new DeviceException("Canale Apple non riuscito (" + appleProblem + ") e Windows non vede l'iPhone", DeviceErrors.NotReady, inner);
-        _active = Wpd;
-        var r = Wpd.Open(dev.Id);
-        // Stesso ID e stessa identità dell'elenco: così l'app lo riconosce come lo stesso telefono.
-        return r with
-        {
-            Device = r.Device with { Id = deviceId, Serial = udid },
-            Notes = [.. (r.Notes ?? Array.Empty<string>()), "Canale Apple non riuscito: " + appleProblem, "Canale: Windows (WPD)"],
-        };
-    }
-
-    private bool IsWifiOnly(string deviceId)
-    {
-        try { return _apple.ListDevices().FirstOrDefault(d => d.Id == deviceId)?.IsWifi == true; }
-        catch (Exception e) when (e is not OperationCanceledException) { return false; }
-    }
-
-    private IDeviceBackend Active => _active ?? throw new DeviceException("iPhone non aperto", DeviceErrors.WpdDeviceNotOpen);
-
-    public void Enumerate(Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
-    {
-        if (!AppleActive)
-        {
-            Active.Enumerate(batch, ct);
-            return;
-        }
-        _known.Clear();
+    public void Enumerate(Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct) =>
         _apple.Enumerate(files =>
         {
             foreach (var f in files) _known[f.ObjectId] = f;
             batch(files);
         }, ct);
-    }
 
-    public byte[]? GetThumbnail(string objectId) => Active.GetThumbnail(objectId);
+    public byte[]? GetThumbnail(string objectId) => _apple.GetThumbnail(objectId);
 
     public DownloadResult Download(string objectId, string destination, Action<long> progress, CancellationToken ct) =>
-        Active.Download(objectId, destination, progress, ct);
+        _apple.Download(objectId, destination, progress, ct);
 
     public IReadOnlyList<DeleteResult> Delete(IReadOnlyList<string> objectIds)
     {
-        if (!AppleActive) return Active.Delete(objectIds);
-
         var map = WpdFiles();
-        if (map is null)
-            return objectIds.Select(id => new DeleteResult(id, false, DeviceErrors.NoWpdMatch)).ToList();
+        if (map is null) return objectIds.Select(id => new DeleteResult(id, false, _wpdProblem)).ToList();
 
         var results = new List<DeleteResult>(objectIds.Count);
         foreach (var id in objectIds)
         {
-            var wpdId = _known.TryGetValue(id, out var f) ? Match(map, f) : null;
+            // In un processo nuovo (quello delle cancellazioni) l'elenco non c'è: si chiedono i dati al telefono.
+            var file = _known.TryGetValue(id, out var k) ? k : _apple.Describe(id);
+            var wpdId = file is null ? null : Match(map, file);
             if (wpdId is null)
             {
                 results.Add(new DeleteResult(id, false, DeviceErrors.NoWpdMatch));
@@ -160,16 +88,28 @@ public sealed class SmartBackend : IDeviceBackend
         return results;
     }
 
-    /// <summary>Elenco WPD per nome (una volta per apertura). Null se Windows non mostra le foto.</summary>
+    /// <summary>Elenco WPD del telefono aperto, o null (con il motivo in <see cref="_wpdProblem"/>).</summary>
     private Dictionary<string, List<RemoteFile>>? WpdFiles()
     {
-        if (_wpdFiles is not null) return _wpdFiles;
+        var udid = _apple.OpenedUdid;
+        if (udid is null) { _wpdProblem = DeviceErrors.WpdUnavailable; return null; }
+        if (_wpdFiles is not null && _wpdFilesFor == udid) return _wpdFiles;
+        if (_wpdProblem != 0 && _wpdFilesFor == udid) return null;
+        _wpdFilesFor = udid;
         try
         {
-            var dev = Wpd.ListDevices().FirstOrDefault();
-            if (dev is null) return null;
+            var dev = PickWpdDevice(Wpd.ListDevices(), udid, _apple.UsbDeviceCount());
+            if (dev is null)
+            {
+                _wpdProblem = DeviceErrors.WpdAmbiguous;
+                return null;
+            }
             var opened = Wpd.Open(dev.Id);
-            if (!opened.Ready) return null;
+            if (!opened.Ready)
+            {
+                _wpdProblem = DeviceErrors.WpdUnavailable;
+                return null;
+            }
             var map = new Dictionary<string, List<RemoteFile>>(StringComparer.OrdinalIgnoreCase);
             Wpd.Enumerate(batch =>
             {
@@ -179,12 +119,33 @@ public sealed class SmartBackend : IDeviceBackend
                     list.Add(f);
                 }
             }, CancellationToken.None);
+            if (map.Count == 0)
+            {
+                _wpdProblem = DeviceErrors.WpdUnavailable;
+                return null;
+            }
+            _wpdProblem = 0;
             return _wpdFiles = map;
         }
         catch (DeviceException)
         {
+            _wpdProblem = DeviceErrors.WpdUnavailable;
             return null;
         }
+    }
+
+    /// <summary>
+    /// Lo stesso telefono in WPD. L'ID di Windows contiene il numero di serie USB, che per l'iPhone è l'UDID
+    /// (senza trattino). Se non si ritrova, va bene solo se di iPhone ce n'è uno solo da entrambe le parti.
+    /// </summary>
+    internal static DeviceInfo? PickWpdDevice(IReadOnlyList<DeviceInfo> wpd, string udid, int appleUsbCount)
+    {
+        static string Norm(string s) => new(s.Where(char.IsLetterOrDigit).Select(char.ToUpperInvariant).ToArray());
+        var key = Norm(udid);
+        var byId = wpd.Where(d => Norm(d.Id).Contains(key, StringComparison.Ordinal) || Norm(d.Serial) == key).ToList();
+        if (byId.Count == 1) return byId[0];
+        if (byId.Count == 0 && wpd.Count == 1 && appleUsbCount == 1) return wpd[0];
+        return null;
     }
 
     /// <summary>

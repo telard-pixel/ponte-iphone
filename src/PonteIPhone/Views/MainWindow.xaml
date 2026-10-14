@@ -214,38 +214,6 @@
                                     <TextBlock Text="Tutto" />
                                 </DockPanel>
                             </RadioButton>
-                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding SetFilterCommand}" CommandParameter="Photos"
-                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=Photos}">
-                                <DockPanel>
-                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountPhotos, StringFormat=N0}" Style="{StaticResource Caption}" />
-                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE91B;" Margin="0,0,10,0" />
-                                    <TextBlock Text="Foto" />
-                                </DockPanel>
-                            </RadioButton>
-                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding SetFilterCommand}" CommandParameter="Live"
-                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=Live}">
-                                <DockPanel>
-                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountLive, StringFormat=N0}" Style="{StaticResource Caption}" />
-                                    <TextBlock Style="{StaticResource Icon}" Text="&#xEA3A;" Margin="0,0,10,0" />
-                                    <TextBlock Text="Live Photo" />
-                                </DockPanel>
-                            </RadioButton>
-                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding SetFilterCommand}" CommandParameter="Videos"
-                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=Videos}">
-                                <DockPanel>
-                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountVideos, StringFormat=N0}" Style="{StaticResource Caption}" />
-                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE714;" Margin="0,0,10,0" />
-                                    <TextBlock Text="Video" />
-                                </DockPanel>
-                            </RadioButton>
-                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding SetFilterCommand}" CommandParameter="Screenshots"
-                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=Screenshots}">
-                                <DockPanel>
-                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountScreenshots, StringFormat=N0}" Style="{StaticResource Caption}" />
-                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE8EA;" Margin="0,0,10,0" />
-                                    <TextBlock Text="Screenshot" />
-                                </DockPanel>
-                            </RadioButton>
                             <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding SetFilterCommand}" CommandParameter="NotCopied"
                                          IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=NotCopied}">
                                 <DockPanel>
@@ -278,9 +246,6 @@
                 <StackPanel Margin="20,12,16,4">
                     <DockPanel>
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                            <ui:Button ToolTip="Mostra o nascondi il pannello dettagli" Command="{Binding ToggleInspectorCommand}" Margin="0,0,6,0">
-                                <TextBlock Text="&#xE89F;" FontFamily="{StaticResource IconFont}" />
-                            </ui:Button>
                             <ui:Button ToolTip="Rileggi il telefono (F5)" Command="{Binding ReloadCommand}">
                                 <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}" />
                             </ui:Button>
@@ -297,14 +262,6 @@
                             <ui:Button Content="Tutto" Margin="0,0,4,0" Command="{Binding SelectAllCommand}" ToolTip="Tutti gli elementi mostrati (Ctrl+A)" />
                             <ui:Button Content="Da copiare" Margin="0,0,4,0" Command="{Binding SelectNotCopiedCommand}" ToolTip="Solo quelli non ancora sul PC" />
                             <ui:Button Content="Nessuno" Command="{Binding ClearSelectionCommand}" ToolTip="Deseleziona tutto (Esc)" />
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,18,6">
-                            <ui:Button Content="{Binding SortLabel}" Command="{Binding ToggleSortCommand}" ToolTip="Cambia l'ordine" />
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
-                            <TextBlock Text="Miniature" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <Slider Width="120" Minimum="80" Maximum="220" Value="{Binding TileSize}" VerticalAlignment="Center"
-                                    IsSnapToTickEnabled="True" TickFrequency="10" />
                         </StackPanel>
                     </WrapPanel>
                 </StackPanel>
@@ -346,7 +303,7 @@
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowNoDevice, Converter={StaticResource BoolToVis}}">
                 <StackPanel MaxWidth="500" Margin="32" VerticalAlignment="Center" HorizontalAlignment="Center">
                     <TextBlock Text="Collega l'iPhone con il cavo USB" FontSize="26" FontWeight="SemiBold" TextWrapping="Wrap" />
-                    <TextBlock Text="La libreria compare da sola appena il telefono è pronto (col cavo o in Wi-Fi)." Style="{StaticResource Caption}" FontSize="13" Margin="0,6,0,22" TextWrapping="Wrap" />
+                    <TextBlock Text="La libreria compare da sola appena il telefono è pronto." Style="{StaticResource Caption}" FontSize="13" Margin="0,6,0,22" TextWrapping="Wrap" />
 
                     <Grid Margin="0,0,0,14">
                         <Grid.ColumnDefinitions>
@@ -392,21 +349,6 @@
                             <Run Text="Se l'iPhone chiede “Autorizzare questo computer?”, tocca" /> <Run Text="Autorizza" FontWeight="SemiBold" /> <Run Text="e inserisci il codice." />
                         </TextBlock>
                     </Grid>
-                    <Border Style="{StaticResource SettingCard}" Margin="0,10,0,0">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="32" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Style="{StaticResource Icon}" Text="&#xE701;" FontSize="18" VerticalAlignment="Top" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
-                            <StackPanel Grid.Column="1">
-                                <TextBlock FontWeight="SemiBold" TextWrapping="Wrap" Text="Senza cavo, in Wi-Fi" />
-                                <TextBlock Style="{StaticResource Caption}" Margin="0,3,0,0" TextWrapping="Wrap"
-                                           Text="Una volta sola: collega l'iPhone col cavo, apri Dispositivi Apple, scegli il telefono e attiva l'opzione per mostrarlo quando è in Wi-Fi, poi Applica. Da lì basta che PC e iPhone siano sulla stessa rete Wi-Fi e l'iPhone sbloccato (meglio se in carica). In Wi-Fi si copia, ma per eliminare serve il cavo." />
-                            </StackPanel>
-                        </Grid>
-                    </Border>
-
                     <Border Style="{StaticResource SettingCard}" Margin="0,10,0,0">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -485,25 +427,6 @@
                             </StackPanel>
                         </DockPanel>
                     </Border>
-                    <Border Style="{StaticResource SettingCard}">
-                        <DockPanel>
-                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding ByYearMonth}" />
-                            <StackPanel>
-                                <TextBlock Text="Sottocartelle per anno e mese" />
-                                <TextBlock Text="Dalla data di scatto letta nel file, es. 2026\10-Ottobre" Style="{StaticResource Caption}" />
-                            </StackPanel>
-                        </DockPanel>
-                    </Border>
-                    <Border Style="{StaticResource SettingCard}">
-                        <DockPanel>
-                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding SkipAlreadyCopied}" />
-                            <StackPanel>
-                                <TextBlock Text="Salta gli elementi già copiati" />
-                                <TextBlock Text="Riconosciuti dal registro delle copie, anche dopo mesi" Style="{StaticResource Caption}" />
-                            </StackPanel>
-                        </DockPanel>
-                    </Border>
-
                     <TextBlock Text="Formati" FontWeight="SemiBold" Margin="0,16,0,8" />
                     <Border Style="{StaticResource SettingCard}">
                         <DockPanel>
@@ -514,80 +437,18 @@
                             </StackPanel>
                         </DockPanel>
                     </Border>
-                    <Border Style="{StaticResource SettingCard}" Visibility="{Binding ConvertHeic, Converter={StaticResource BoolToVis}}">
-                        <DockPanel>
-                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding KeepHeicOriginal}" />
-                            <StackPanel>
-                                <TextBlock Text="Tieni anche l'originale HEIC" />
-                                <TextBlock Text="Accanto al JPG, nella stessa cartella" Style="{StaticResource Caption}" />
-                            </StackPanel>
-                        </DockPanel>
-                    </Border>
-                    <Border Style="{StaticResource SettingCard}">
-                        <DockPanel>
-                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding IncludeEdited}" />
-                            <StackPanel>
-                                <TextBlock Text="Copia anche le versioni modificate" />
-                                <TextBlock Text="IMG_E… accanto all'originale. Con Sposta si copiano sempre, altrimenti andrebbero perse" Style="{StaticResource Caption}" />
-                            </StackPanel>
-                        </DockPanel>
-                    </Border>
-                    <Border Style="{StaticResource SettingCard}">
-                        <DockPanel>
-                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding IncludeSidecars}" />
-                            <StackPanel>
-                                <TextBlock Text="Copia i file .AAE" />
-                                <TextBlock Text="Istruzioni di modifica di Apple: su Windows non servono" Style="{StaticResource Caption}" />
-                            </StackPanel>
-                        </DockPanel>
-                    </Border>
 
-                    <TextBlock Text="Sicurezza" FontWeight="SemiBold" Margin="0,16,0,8" />
+                    <TextBlock Text="Informazioni" FontWeight="SemiBold" Margin="0,16,0,8" />
                     <Border Style="{StaticResource SettingCard}">
                         <DockPanel>
-                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding ConfirmMove}" />
+                            <ui:Button DockPanel.Dock="Right" Content="Salva rapporto" VerticalAlignment="Center" Command="{Binding SaveReportCommand}"
+                                       ToolTip="Crea sul desktop un file da mandare per l'assistenza" />
                             <StackPanel>
-                                <TextBlock Text="Chiedi conferma prima di Sposta" />
-                                <TextBlock Text="Riepilogo con l'avviso su Foto di iCloud" Style="{StaticResource Caption}" />
+                                <TextBlock Text="{Binding VersionText}" />
+                                <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
+                                           Text="Le foto finiscono in cartelle per anno e mese; quelle già copiate si saltano; gli aggiornamenti arrivano da soli." />
                             </StackPanel>
                         </DockPanel>
-                    </Border>
-                    <Border Style="{StaticResource SettingCard}">
-                        <DockPanel>
-                            <ui:ToggleSwitch DockPanel.Dock="Right" IsChecked="{Binding KeepAwakeSetting}" />
-                            <StackPanel>
-                                <TextBlock Text="Tieni sveglio il PC durante le copie" />
-                                <TextBlock Text="Il PC non va in sospensione a metà di un trasferimento lungo" Style="{StaticResource Caption}" />
-                            </StackPanel>
-                        </DockPanel>
-                    </Border>
-
-                    <TextBlock Text="Aggiornamenti" FontWeight="SemiBold" Margin="0,16,0,8" />
-                    <Border Style="{StaticResource SettingCard}">
-                        <DockPanel>
-                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
-                                <ui:Button Content="Controlla ora" Margin="0,0,12,0" Command="{Binding CheckUpdatesNowCommand}" />
-                                <ui:ToggleSwitch IsChecked="{Binding AutoUpdate}" />
-                            </StackPanel>
-                            <StackPanel>
-                                <TextBlock Text="Aggiornamenti automatici" />
-                                <TextBlock Style="{StaticResource Caption}">
-                                    <Run Text="{Binding VersionText, Mode=OneWay}" /><Run Text=" · " /><Run Text="{Binding UpdateStatus, Mode=OneWay}" />
-                                </TextBlock>
-                            </StackPanel>
-                        </DockPanel>
-                    </Border>
-
-                    <TextBlock Text="Diagnostica" FontWeight="SemiBold" Margin="0,16,0,8" />
-                    <Border Style="{StaticResource SettingCard}">
-                        <StackPanel>
-                            <TextBox Text="{Binding Diagnostics, Mode=OneWay}" IsReadOnly="True" FontFamily="Cascadia Mono, Consolas" FontSize="12"
-                                     TextWrapping="NoWrap" HorizontalScrollBarVisibility="Auto" BorderThickness="0" />
-                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                <ui:Button Content="Salva un rapporto sul desktop" Margin="0,0,8,0" Command="{Binding SaveReportCommand}" />
-                                <ui:Button Content="Apri il registro" Command="{Binding OpenLogFolderCommand}" />
-                            </StackPanel>
-                        </StackPanel>
                     </Border>
                 </StackPanel>
             </ScrollViewer>
@@ -744,11 +605,6 @@
                             <TextBlock TextWrapping="Wrap" FontSize="12.5"
                                        Text="L'ultima volta questo iPhone non ha permesso di cancellare da Windows: probabilmente verranno solo copiati." />
                         </Border>
-                        <Border Background="{DynamicResource SystemFillColorCriticalBackgroundBrush}" CornerRadius="6" Padding="12,9" Margin="0,8,0,0"
-                                Visibility="{Binding IsWifi, Converter={StaticResource BoolToVis}}">
-                            <TextBlock TextWrapping="Wrap" FontSize="12.5"
-                                       Text="L'iPhone è collegato in Wi-Fi: verranno copiati, ma per toglierli dal telefono serve il cavo." />
-                        </Border>
                     </StackPanel>
                     <Border Background="{DynamicResource LayerFillColorDefaultBrush}" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
                             Padding="24,14" CornerRadius="0,0,8,8">
@@ -781,11 +637,6 @@
                                 Visibility="{Binding DeleteRefusedBefore, Converter={StaticResource BoolToVis}}">
                             <TextBlock TextWrapping="Wrap" FontSize="12.5"
                                        Text="L'ultima volta questo iPhone non ha permesso di cancellare da Windows: probabilmente non succederà niente." />
-                        </Border>
-                        <Border Background="{DynamicResource SystemFillColorCriticalBackgroundBrush}" CornerRadius="6" Padding="12,9" Margin="0,8,0,0"
-                                Visibility="{Binding IsWifi, Converter={StaticResource BoolToVis}}">
-                            <TextBlock TextWrapping="Wrap" FontSize="12.5"
-                                       Text="L'iPhone è collegato in Wi-Fi: per eliminare serve il cavo. Collegalo e riprova." />
                         </Border>
                     </StackPanel>
                     <Border Background="{DynamicResource LayerFillColorDefaultBrush}" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"

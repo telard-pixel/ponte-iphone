@@ -32,6 +32,8 @@ public sealed class FakeAppleDevice : IDisposable
     /// <summary>Il telefono accetta il collegamento ma non risponde mai (come un iPhone che si pianta).</summary>
     public bool HangLockdown { get; set; }
     public int LockdownConnections;
+    /// <summary>Il prossimo collegamento AFC cade dopo questo numero di pacchetti (0 = mai): USB che singhiozza.</summary>
+    public int DropAfcAfter;
     public bool Wifi { get; set; }
     public int SessionsWithClientCert;
 
@@ -224,8 +226,11 @@ public sealed class FakeAppleDevice : IDisposable
     {
         var handles = new Dictionary<ulong, (byte[] Data, int Pos)>();
         ulong next = 1;
+        int dropAfter = Interlocked.Exchange(ref DropAfcAfter, 0);
+        int served = 0;
         while (true)
         {
+            if (dropAfter > 0 && served++ >= dropAfter) return;
             var h = new byte[40];
             try { s.ReadExactly(h); }
             catch (EndOfStreamException) { return; }

@@ -24,6 +24,8 @@ public sealed partial class AppleBackend : IDeviceBackend
 
     private readonly UsbmuxClient _mux;
     private AfcClient? _afc;
+    /// <summary>Telefono aperto per ultimo: dopo un intoppo si riapre da solo alla chiamata successiva.</summary>
+    private string? _openedId;
     private readonly List<string> _notes = [];
 
     public AppleBackend(UsbmuxClient? mux = null)
@@ -31,29 +33,39 @@ public sealed partial class AppleBackend : IDeviceBackend
         _mux = mux ?? new UsbmuxClient();
     }
 
-    /// <summary>Un telefono per UDID: col cavo se c'è, altrimenti in Wi-Fi.</summary>
+    /// <summary>
+    /// iPhone collegati col cavo. Quelli in Wi-Fi si ignorano: con Dispositivi Apple del Microsoft Store
+    /// non compaiono mai, e quando compaiono non si possono cancellare foto (scelta del 14/10: solo cavo).
+    /// </summary>
     public IReadOnlyList<DeviceInfo> ListDevices() =>
-        _mux.ListDevices()
-            .GroupBy(d => d.Udid).Select(Best)
+        UsbDevices()
             .Select(d => new DeviceInfo(IdPrefix + d.Udid, "", "Apple Inc.", "iPhone", d.Udid, "", d.ConnectionType))
             .ToList();
 
     private static bool IsNetwork(UsbmuxDevice d) => d.ConnectionType.Equals("Network", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Il cavo è più veloce e permette di cancellare: si preferisce sempre al Wi-Fi.</summary>
-    private static UsbmuxDevice Best(IEnumerable<UsbmuxDevice> same) => same.OrderBy(IsNetwork).First();
+    private List<UsbmuxDevice> UsbDevices() =>
+        _mux.ListDevices().Where(d => !IsNetwork(d)).GroupBy(d => d.Udid).Select(g => g.First()).ToList();
+
+    /// <summary>UDID del telefono aperto (per scegliere lo stesso telefono anche in WPD).</summary>
+    public string? OpenedUdid => _openedId is null ? null : Udid(_openedId);
+
+    /// <summary>Quanti iPhone sono collegati col cavo (con più telefoni la cancellazione deve essere sicura del telefono giusto).</summary>
+    public int UsbDeviceCount() => UsbDevices().Count;
+
+    private static string Udid(string deviceId) => deviceId.StartsWith(IdPrefix, StringComparison.Ordinal) ? deviceId[IdPrefix.Length..] : deviceId;
 
     public OpenResult Open(string deviceId)
     {
         CloseAfc();
         _notes.Clear();
-        var udid = deviceId.StartsWith(IdPrefix, StringComparison.Ordinal) ? deviceId[IdPrefix.Length..] : deviceId;
+        _openedId = deviceId;
+        var udid = Udid(deviceId);
         UsbmuxDevice dev;
         try
         {
-            var same = _mux.ListDevices().Where(d => d.Udid == udid).ToList();
-            if (same.Count == 0) throw new DeviceException("iPhone non collegato", DeviceErrors.DeviceNotConnected);
-            dev = Best(same);
+            dev = UsbDevices().FirstOrDefault(d => d.Udid == udid)
+                  ?? throw new DeviceException("iPhone non collegato", DeviceErrors.DeviceNotConnected);
         }
         catch (UsbmuxException e)
         {
@@ -249,7 +261,36 @@ public sealed partial class AppleBackend : IDeviceBackend
         }
     }
 
-    private AfcClient Afc => _afc ?? throw new DeviceException("iPhone non aperto", DeviceErrors.WpdDeviceNotOpen);
+    private AfcClient Afc => _afc ?? Reopen();
+
+    /// <summary>Dopo un intoppo (telefono bloccato un attimo, lento, USB che singhiozza) si riapre senza disturbare nessuno.</summary>
+    private AfcClient Reopen()
+    {
+        if (_openedId is null) throw new DeviceException("iPhone non aperto", DeviceErrors.WpdDeviceNotOpen);
+        OpenResult r;
+        try
+        {
+            r = Open(_openedId);
+        }
+        catch (AppleUnavailableException e)
+        {
+            throw new DeviceException("Il telefono non risponde: " + e.Message, DeviceErrors.GenFailure, e);
+        }
+        if (!r.Ready || _afc is null) throw new DeviceException("L'iPhone è bloccato: sbloccalo", DeviceErrors.NotReady);
+        return _afc;
+    }
+
+    /// <summary>Nome, cartella, dimensione e data di un file del Rullino (per ritrovarlo in WPD quando si cancella).</summary>
+    public RemoteFile? Describe(string objectId) => Guard(() =>
+    {
+        if (!objectId.StartsWith(Dcim + "/", StringComparison.Ordinal)) return null;
+        Dictionary<string, string> st;
+        try { st = Afc.GetFileInfo(objectId); }
+        catch (AfcException e) when (e.Code == AfcException.ObjectNotFound) { return null; }
+        var rel = objectId[(Dcim.Length + 1)..];
+        var slash = rel.LastIndexOf('/');
+        return ToRemote(objectId, rel[(slash + 1)..], slash < 0 ? "" : rel[..slash], st, canDelete: true);
+    });
 
     // ------------------------------------------------------------------ elenco
 
@@ -371,8 +412,8 @@ public sealed partial class AppleBackend : IDeviceBackend
         try
         {
             var st = Afc.GetFileInfo(objectId);
-            if (!long.TryParse(st.GetValueOrDefault("st_size"), out var size) || size > 40L << 20) return null;
-            var bytes = Afc.ReadAll(objectId, 41 << 20);
+            if (!long.TryParse(st.GetValueOrDefault("st_size"), out var size) || size > 15L << 20) return null;
+            var bytes = Afc.ReadAll(objectId, 16 << 20);
             if (bytes.Length == 0) return null;
             using var img = new MagickImage(bytes);
             img.AutoOrient();
@@ -452,9 +493,15 @@ public sealed partial class AppleBackend : IDeviceBackend
         }
         catch (Exception e) when (e is IOException or EndOfStreamException or ObjectDisposedException or System.Net.Sockets.SocketException)
         {
-            // Il collegamento è caduto: telefono scollegato (o servizio Apple riavviato). Si riapre.
+            // Collegamento caduto o risposta in ritardo. Alla prossima chiamata si riapre da solo; qui si dice
+            // solo se il telefono è proprio sparito (scollegato) o se è lì ma non ha risposto (si riprova).
             CloseAfc();
-            throw new DeviceException("Collegamento con l'iPhone interrotto: " + e.Message, DeviceErrors.WpdDeviceNotOpen, e);
+            bool present;
+            try { present = _openedId is not null && UsbDevices().Any(d => d.Udid == Udid(_openedId)); }
+            catch (UsbmuxException) { present = false; }
+            throw present
+                ? new DeviceException("Il telefono non ha risposto in tempo: " + e.Message, DeviceErrors.GenFailure, e)
+                : new DeviceException("iPhone scollegato", DeviceErrors.DeviceNotConnected, e);
         }
     }
 

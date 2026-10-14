@@ -110,6 +110,11 @@ public sealed class WorkerConnection : IDeviceConnection
         public Session Session { get; } = session;
         public TimeSpan Timeout { get; } = timeout;
         public long LastActivity = Stopwatch.GetTimestamp();
+        /// <summary>
+        /// Il processo la sta eseguendo. Una richiesta ancora in coda dietro un'altra lunga (es. una miniatura
+        /// dietro l'elenco) non è un blocco: senza questo il watchdog chiudeva processi che lavoravano.
+        /// </summary>
+        public volatile bool Started;
         public Action<JsonElement>? OnBatch { get; init; }
         public Action<JsonElement>? OnProgress { get; init; }
         public void Touch() => Interlocked.Exchange(ref LastActivity, Stopwatch.GetTimestamp());
@@ -192,6 +197,9 @@ public sealed class WorkerConnection : IDeviceConnection
                 p.Touch();
                 switch (msg.Kind)
                 {
+                    case WorkerProtocol.KindStarted:
+                        p.Started = true;
+                        break;
                     case WorkerProtocol.KindBatch:
                         if (msg.Data is { } b) p.OnBatch?.Invoke(b);
                         break;
@@ -221,7 +229,7 @@ public sealed class WorkerConnection : IDeviceConnection
     {
         foreach (var p in _pending.Values)
         {
-            if (p.Idle > p.Timeout && !p.Session.Dead)
+            if (p.Started && p.Idle > p.Timeout && !p.Session.Dead)
             {
                 _log?.Invoke($"Nessuna risposta dall'iPhone da {p.Idle.TotalSeconds:0} s: riavvio il collegamento");
                 Restarts++;
@@ -302,12 +310,20 @@ public sealed class WorkerConnection : IDeviceConnection
             throw new WorkerRestartedException("Collegamento con l'iPhone interrotto");
         }
 
-        // Annullamento: il processo interrompe l'operazione e risponde "canceled".
+        // Annullamento: il processo interrompe l'operazione e risponde "canceled". Se dentro il driver
+        // non può (chiamata bloccata), dopo 3 secondi si chiude il processo: "Annulla" deve annullare davvero.
         using var reg = ct.Register(() =>
         {
             var cancel = JsonSerializer.Serialize(new WireRequest { Op = WorkerProtocol.OpCancel, Target = req.Id }, WorkerProtocol.Json);
             try { lock (_writeLock) s.Writer.WriteLine(cancel); }
             catch (Exception e) when (e is IOException or ObjectDisposedException) { }
+            _ = Task.Delay(CancelGrace).ContinueWith(_ =>
+            {
+                if (!_pending.TryRemove(req.Id, out var stuck)) return;
+                stuck.Tcs.TrySetCanceled();
+                _log?.Invoke("Annullamento: il processo non rispondeva, lo chiudo");
+                Kill(s, "annullato");
+            }, TaskScheduler.Default);
         });
         return await p.Tcs.Task;
     }
@@ -345,10 +361,13 @@ public sealed class WorkerConnection : IDeviceConnection
         return data?.Deserialize<DownloadResult>(WorkerProtocol.Json) ?? throw new DeviceException("Risposta vuota allo scaricamento");
     }
 
+    /// <summary>Quanto aspettare la risposta a un annullamento prima di chiudere il processo.</summary>
+    public static TimeSpan CancelGrace { get; set; } = TimeSpan.FromSeconds(3);
+
     public async Task<IReadOnlyList<DeleteResult>> DeleteAsync(IReadOnlyList<string> objectIds, CancellationToken ct)
     {
-        // Cancellare un elemento può richiedere qualche secondo: tempo lungo moltiplicato per il numero di file.
-        var timeout = _times.Long + TimeSpan.FromSeconds(5 * objectIds.Count);
+        // La prima volta Windows rilegge il telefono per ritrovare i file: tempo fisso più qualche secondo a file.
+        var timeout = TimeSpan.FromSeconds(90) + TimeSpan.FromSeconds(3 * objectIds.Count);
         var data = await CallAsync(new WireRequest { Op = WorkerProtocol.OpDelete, Ids = objectIds.ToArray() }, timeout, ct);
         return data?.Deserialize<List<DeleteResult>>(WorkerProtocol.Json) ?? [];
     }

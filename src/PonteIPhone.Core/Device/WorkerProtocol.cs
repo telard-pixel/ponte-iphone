@@ -23,6 +23,8 @@ internal static class WorkerProtocol
     public const string KindCanceled = "canceled";
     public const string KindBatch = "batch";
     public const string KindProgress = "progress";
+    /// <summary>Il processo comincia a eseguire la richiesta (prima era in coda): da qui conta il watchdog.</summary>
+    public const string KindStarted = "started";
 
     public static readonly JsonSerializerOptions Json = new()
     {

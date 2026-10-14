@@ -28,6 +28,7 @@ public sealed class ThumbnailService : IDisposable
     private readonly Dictionary<string, LinkedListNode<(string Key, ImageSource Image)>> _memory = new();
     private readonly LinkedList<(string Key, ImageSource Image)> _lru = new();
     private readonly HashSet<string> _missing = new();
+    private readonly Dictionary<string, int> _retries = new();
     private readonly object _lock = new();
     private readonly CancellationTokenSource _cts = new();
     private bool _pumping;
@@ -135,9 +136,22 @@ public sealed class ThumbnailService : IDisposable
                 Errors++;
                 tile.ThumbnailRequested = false;
                 if (Errors <= 5) _log.Warn($"Miniatura di {tile.Item.Primary.Name}: {e.Message}");
-                // Telefono bloccato o scollegato: inutile insistere subito con le altre.
+                // Telefono lento o bloccato un attimo: il collegamento si riapre da solo. La miniatura torna
+                // in coda (al massimo 3 volte), altrimenti la tessera resterebbe grigia finché non la si scorre via.
                 if (e is DeviceException { Kind: DeviceErrorKind.Gone or DeviceErrorKind.Transient })
+                {
                     await Task.Delay(1500, _cts.Token).ContinueWith(_ => { });
+                    var key = KeyOf(tile);
+                    lock (_lock)
+                    {
+                        var n = _retries[key] = _retries.GetValueOrDefault(key) + 1;
+                        if (n <= 3 && tile.IsVisible && !tile.ThumbnailRequested)
+                        {
+                            tile.ThumbnailRequested = true;
+                            _stack.AddLast(tile);
+                        }
+                    }
+                }
             }
         }
     }

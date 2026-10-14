@@ -70,6 +70,7 @@ public static class WorkerHost
                 running[req.Id] = cts;
                 try
                 {
+                    Send(new WireMessage { Id = req.Id, Kind = WorkerProtocol.KindStarted });
                     Execute(req, backend, Send, cts.Token);
                 }
                 catch (OperationCanceledException)

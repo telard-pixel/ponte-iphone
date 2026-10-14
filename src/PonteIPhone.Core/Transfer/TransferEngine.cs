@@ -670,13 +670,23 @@ public sealed class TransferEngine
             {
                 results = await _conn.DeleteAsync(ids.Select(x => x.Id).ToList(), ct);
             }
-            catch (DeviceException e) when (e.Kind is DeviceErrorKind.Gone or DeviceErrorKind.Transient)
+            catch (DeviceException e) when (e.Kind == DeviceErrorKind.Gone)
             {
+                // Scollegato: si aspetta che torni e si riprova.
                 _log?.Warn("Cancellazione: " + e.Message);
                 await WaitForDeviceAsync(ct);
                 SetPhase(TransferPhase.Deleting, deleting);
                 Requeue(deletable, countAsError: true);
                 continue;
+            }
+            catch (DeviceException e)
+            {
+                // Il telefono non ha risposto alla cancellazione (WPD bloccato): riprovare vorrebbe dire minuti
+                // di attesa per niente. Ci si ferma e si dice come fare.
+                _log?.Warn("Cancellazione interrotta: " + e.Message);
+                _report.DeleteProblem ??= "il telefono non ha risposto alla cancellazione: eliminale dall'app Foto (hanno il bollino ✓ PC)";
+                _report.DeleteFailed += deletable.Count + queue.Count;
+                return;
             }
 
             var byId = results.GroupBy(r => r.ObjectId).ToDictionary(g => g.Key, g => g.Last());
@@ -699,6 +709,18 @@ public sealed class TransferEngine
                         .Select(x => byId.TryGetValue(x.Id, out var r) ? r : null).FirstOrDefault(r => r is { Ok: false });
                     _report.DeleteProblem ??= bad is null ? "il telefono non ha risposto" : DeviceErrors.Describe(bad.HResult);
                 }
+            }
+
+            // Problemi che valgono per tutti (Windows non vede le foto, più iPhone collegati): inutile insistere.
+            var stop = deletable.SelectMany(i => ids.Where(x => x.Item == i).Select(x => x.Id))
+                .Select(id => byId.TryGetValue(id, out var r) ? r : null)
+                .FirstOrDefault(r => r is { Ok: false } && DeviceErrors.StopsDeletion(r.HResult));
+            if (stop is not null && _report.Deleted == 0 && failed.Count == deletable.Count)
+            {
+                _report.DeleteProblem ??= DeviceErrors.Describe(stop.HResult);
+                _report.DeleteFailed += failed.Count + queue.Count;
+                _log?.Warn("Cancellazione non possibile: " + _report.DeleteProblem);
+                return;
             }
 
             if (failed.Count > 0)

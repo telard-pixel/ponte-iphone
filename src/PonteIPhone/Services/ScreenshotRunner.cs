@@ -57,9 +57,9 @@ public static class ScreenshotRunner
                 Save(window, Path.Combine(folder, "4-anteprima.png"));
                 vm.ClosePreviewCommand.Execute(null);
 
-                vm.SetFilterCommand.Execute("Videos");
+                vm.SetFilterCommand.Execute("NotCopied");
                 await Settle(1500);
-                Save(window, Path.Combine(folder, "5-filtro-video.png"));
+                Save(window, Path.Combine(folder, "5-da-copiare.png"));
                 vm.SetFilterCommand.Execute("All");
 
                 vm.OpenSettingsCommand.Execute(null);
