@@ -20,6 +20,7 @@ public sealed class AppleTests : IDisposable
         _phone.Files["/DCIM/100APPLE/IMG_0001.HEIC"] = FakeBackend.Deterministic("a", 700_000);
         _phone.Files["/DCIM/100APPLE/IMG_0001.MOV"] = FakeBackend.Deterministic("b", 1_200_000);
         _phone.Files["/DCIM/100APPLE/IMG_0002.JPG"] = FakeBackend.Deterministic("c", 90_000);
+        _phone.Files["/DCIM/100APPLE/IMG_0003.JPG"] = []; // vuoto (segnaposto di iCloud): va escluso
         _phone.Files["/PhotoData/Mutations/DCIM/100APPLE/IMG_0002/Adjustments/FullSizeRender.jpg"] = FakeBackend.Deterministic("d", 80_000);
         _phone.Files["/PhotoData/Thumbnails/V2/DCIM/100APPLE/IMG_0001.HEIC/5005.JPG"] = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3];
     }

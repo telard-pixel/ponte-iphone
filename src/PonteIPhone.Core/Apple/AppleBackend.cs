@@ -269,6 +269,9 @@ public sealed partial class AppleBackend : IDeviceBackend
                     if (depth < 3) Walk(full, folder.Length == 0 ? name : folder + "/" + name, depth + 1);
                     continue;
                 }
+                // File vuoti (segnaposto di Foto di iCloud, scatti interrotti): niente da copiare,
+                // e una copia di 0 byte passerebbe tutti i controlli.
+                if (!long.TryParse(st.GetValueOrDefault("st_size"), out var size) || size <= 0) continue;
                 buffer.Add(ToRemote(full, name, folder, st, canDelete: true));
                 bases.Add(folder + "/" + Path.GetFileNameWithoutExtension(name));
                 Flush();
@@ -340,7 +343,7 @@ public sealed partial class AppleBackend : IDeviceBackend
         {
             var folder = "/PhotoData/Thumbnails/V2" + objectId;
             var jpg = Afc.ReadDirectory(folder).Where(n => n.EndsWith(".JPG", StringComparison.OrdinalIgnoreCase)).Order().FirstOrDefault();
-            if (jpg is not null) return Afc.ReadAll(folder + "/" + jpg, 8 << 20);
+            if (jpg is not null && Afc.ReadAll(folder + "/" + jpg, 8 << 20) is { Length: > 0 } thumb) return thumb;
         }
         catch (AfcException) { }
 
@@ -352,6 +355,7 @@ public sealed partial class AppleBackend : IDeviceBackend
             var st = Afc.GetFileInfo(objectId);
             if (!long.TryParse(st.GetValueOrDefault("st_size"), out var size) || size > 40L << 20) return null;
             var bytes = Afc.ReadAll(objectId, 41 << 20);
+            if (bytes.Length == 0) return null;
             using var img = new MagickImage(bytes);
             img.AutoOrient();
             img.Thumbnail(320, 320);

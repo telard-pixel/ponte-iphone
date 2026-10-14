@@ -89,13 +89,32 @@ public sealed class DeviceMonitor : IDisposable
     private static extern bool UnregisterDeviceNotification(IntPtr handle);
 }
 
-/// <summary>Il driver USB di Apple (da Dispositivi Apple o iTunes) è installato?</summary>
+/// <summary>Il software Apple (Dispositivi Apple o iTunes) è installato?</summary>
 public static class AppleDriver
 {
     public const string StoreUrl = "ms-windows-store://pdp/?productid=9NP83LWLPZ9K";
     public const string WebUrl = "https://apps.microsoft.com/detail/9NP83LWLPZ9K";
 
-    public static bool IsInstalled()
+    public static bool IsInstalled() => ServiceRunning() || InRegistry();
+
+    /// <summary>
+    /// Il servizio Apple risponde: la prova più sicura. Dispositivi Apple del Microsoft Store non sempre
+    /// registra i servizi con i nomi classici (rapporto del 14/10: "driver NON trovato" ma canale Apple attivo).
+    /// </summary>
+    private static bool ServiceRunning()
+    {
+        try
+        {
+            using var client = new System.Net.Sockets.TcpClient();
+            return client.ConnectAsync(System.Net.IPAddress.Loopback, 27015).Wait(TimeSpan.FromMilliseconds(400)) && client.Connected;
+        }
+        catch (Exception e) when (e is System.Net.Sockets.SocketException or AggregateException or ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
+    private static bool InRegistry()
     {
         try
         {
