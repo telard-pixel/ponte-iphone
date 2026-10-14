@@ -132,6 +132,81 @@ public sealed class TransferTests : IDisposable
     }
 
     [Fact]
+    public async Task AutoLockMidFileWaitsForUnlockAndResumes()
+    {
+        _fake.Add("202610_a", "IMG_0001.MOV", 2_000_000, Oct);
+        _fake.Add("202610_a", "IMG_0002.MOV", 2_000_000, Oct);
+        _fake.LockDuringDownloads = 1;
+        var items = await LoadAsync();
+        var statuses = new List<TransferStatus>();
+
+        var run = Engine().RunAsync(items, TransferMode.Copy, Options(), new SyncProgress<TransferStatus>(statuses.Add), null, CancellationToken.None);
+        await WaitFor(() => _fake.Locked);
+        await Task.Delay(300);
+        // Bloccato: si aspetta, senza consumare tentativi e senza dare il file per rifiutato.
+        Assert.False(run.IsCompleted);
+        await _conn.Run(b => { _fake.Locked = false; return true; }, CancellationToken.None);
+        var report = await run.WaitAsync(TimeSpan.FromSeconds(20));
+
+        Assert.Equal(2, report.Copied);
+        Assert.Empty(report.Failed);
+        Assert.Equal(0, report.Retries);
+        Assert.Contains(statuses, s => s.Phase == TransferPhase.WaitingForDevice);
+    }
+
+    [Fact]
+    public async Task LockDuringMoveDeleteIsNotTakenForARefusal()
+    {
+        for (int i = 1; i <= 3; i++) _fake.Add("202610_a", $"IMG_000{i}.HEIC", 10_000, Oct);
+        _fake.LockOnNextDelete = true;
+        var items = await LoadAsync();
+
+        var run = Engine().RunAsync(items, TransferMode.Move, Options(), null, null, CancellationToken.None);
+        await WaitFor(() => _fake.Locked);
+        await Task.Delay(200);
+        Assert.False(run.IsCompleted);
+        await _conn.Run(b => { _fake.Locked = false; return true; }, CancellationToken.None);
+        var report = await run.WaitAsync(TimeSpan.FromSeconds(20));
+
+        Assert.False(report.DeleteRefused);
+        Assert.Equal(3, report.Deleted);
+        Assert.Empty(_fake.Files);
+    }
+
+    [Fact]
+    public async Task DeleteOnlyRemovesWithoutCopying()
+    {
+        _fake.Add("202610_a", "IMG_0001.HEIC", 10_000, Oct);
+        _fake.Add("202610_a", "IMG_0001.MOV", 10_000, Oct);
+        _fake.Add("202610_a", "IMG_0002.HEIC", 10_000, Oct);
+        var items = await LoadAsync();
+
+        var report = await Engine().DeleteAsync(items, Options(), null, CancellationToken.None);
+
+        Assert.Equal(TransferMode.Delete, report.Mode);
+        Assert.Equal(2, report.Deleted);
+        Assert.Equal(2, report.Removed.Count);
+        Assert.Empty(_fake.Files);
+        Assert.Equal(0, _fake.DownloadCalls);
+        Assert.False(Directory.Exists(Dest));
+    }
+
+    [Fact]
+    public async Task DeleteOnlyRefusedStopsAtOnce()
+    {
+        for (int i = 1; i <= 4; i++) _fake.Add("202610_a", $"IMG_000{i}.HEIC", 10_000, Oct);
+        _fake.RefuseDelete = true;
+        var items = await LoadAsync();
+
+        var report = await Engine().DeleteAsync(items, Options(), null, CancellationToken.None);
+
+        Assert.True(report.DeleteRefused);
+        Assert.Equal(0, report.Deleted);
+        Assert.Equal(4, report.DeleteFailed);
+        Assert.Equal(4, _fake.Files.Count);
+    }
+
+    [Fact]
     public async Task MoveDeletesOnlyAfterVerifiedCopy()
     {
         _fake.Add("202610_a", "IMG_0001.HEIC", 80_000, Oct);

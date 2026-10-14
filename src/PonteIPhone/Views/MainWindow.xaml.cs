@@ -97,9 +97,15 @@ public partial class MainWindow : FluentWindow
         }
         if (e.Key == Key.Escape)
         {
-            if (_vm.ConfirmMoveOpen || _vm.ResultOpen) _vm.CancelDialogCommand.Execute(null);
+            if (_vm.ConfirmMoveOpen || _vm.ConfirmDeleteOpen || _vm.ResultOpen) _vm.CancelDialogCommand.Execute(null);
             else if (_vm.IsSettingsOpen) _vm.CloseSettingsCommand.Execute(null);
             else _vm.ClearSelectionCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Delete && !_vm.ConfirmMoveOpen && !_vm.ConfirmDeleteOpen && !_vm.ResultOpen && !_vm.IsSettingsOpen
+                 && Keyboard.FocusedElement is not System.Windows.Controls.Primitives.TextBoxBase)
+        {
+            if (_vm.DeleteCommand.CanExecute(null)) _vm.DeleteCommand.Execute(null);
             e.Handled = true;
         }
         else if (e.Key == Key.Space && _vm.FocusedTile is { } t && Keyboard.FocusedElement is not System.Windows.Controls.Primitives.TextBoxBase)

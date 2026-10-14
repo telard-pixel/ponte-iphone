@@ -118,6 +118,7 @@ public sealed partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(DeviceStatus));
         CopyCommand.NotifyCanExecuteChanged();
         MoveCommand.NotifyCanExecuteChanged();
+        DeleteCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnDeviceChanged(DeviceInfo? value)
@@ -190,6 +191,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (!await _deviceLock.WaitAsync(0)) return;
         try
         {
+            RecycleIfStuckLocked();
             IReadOnlyList<DeviceInfo> list;
             try
             {
@@ -213,6 +215,7 @@ public sealed partial class MainViewModel : ObservableObject
 
             if (list.Count == 0)
             {
+                SetLocked(false);
                 if (Screen != AppScreen.NoDevice) { CloseLibrary(); Screen = AppScreen.NoDevice; }
                 DriverInstalled = _demo || AppleDriver.IsInstalled();
                 return;
@@ -237,6 +240,7 @@ public sealed partial class MainViewModel : ObservableObject
             _log.Warn("Apertura dell'iPhone: " + e.Message);
             Device = dev;
             Screen = AppScreen.Locked;
+            SetLocked(true);
             return;
         }
 
@@ -249,13 +253,45 @@ public sealed partial class MainViewModel : ObservableObject
         {
             case OpenState.LockedOrNotTrusted:
                 Screen = AppScreen.Locked;
+                SetLocked(true);
                 return;
             case OpenState.NoCameraRoll:
                 Screen = AppScreen.NoCameraRoll;
+                SetLocked(true);
                 return;
         }
+        SetLocked(false);
         _log.Info($"Aperto {Device.DisplayName} ({Device.Model}, iOS {Device.Firmware})");
         await LoadLibraryAsync();
+    }
+
+    private DateTime? _lockedSince;
+    private DateTime _lastRecycle = DateTime.MinValue;
+
+    /// <summary>Da quanto il telefono è collegato ma senza foto visibili (bloccato, non autorizzato, driver).</summary>
+    [ObservableProperty] private bool _lockedForAWhile;
+
+    private void SetLocked(bool locked)
+    {
+        if (!locked) _lockedSince = null;
+        else _lockedSince ??= DateTime.UtcNow;
+        LockedForAWhile = _lockedSince is { } t && DateTime.UtcNow - t > TimeSpan.FromSeconds(20);
+    }
+
+    /// <summary>
+    /// Telefono già collegato all'avvio, o sbloccato dopo: a volte Windows continua a far vedere
+    /// la memoria vuota alla stessa sessione. Ogni 15 secondi di "bloccato" si riparte con un processo nuovo.
+    /// </summary>
+    private void RecycleIfStuckLocked()
+    {
+        if (_lockedSince is not { } since || _browse is not WorkerConnection w) return;
+        if (Screen is not (AppScreen.Locked or AppScreen.NoCameraRoll)) return;
+        var now = DateTime.UtcNow;
+        if (now - since < TimeSpan.FromSeconds(15) || now - _lastRecycle < TimeSpan.FromSeconds(15)) return;
+        _lastRecycle = now;
+        _thumbs?.Dispose();
+        _thumbs = null;
+        w.Restart("l'iPhone risulta bloccato da " + (int)(now - since).TotalSeconds + " s");
     }
 
     private void CloseLibrary()
@@ -610,6 +646,7 @@ public sealed partial class MainViewModel : ObservableObject
         }
         CopyCommand.NotifyCanExecuteChanged();
         MoveCommand.NotifyCanExecuteChanged();
+        DeleteCommand.NotifyCanExecuteChanged();
     }
 
     // ================================================================== pannello dettagli e anteprima
@@ -827,7 +864,7 @@ public sealed partial class MainViewModel : ObservableObject
     // ================================================================== copia e sposta
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(CopyCommand), nameof(MoveCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CopyCommand), nameof(MoveCommand), nameof(DeleteCommand))]
     private bool _isTransferring;
 
     [ObservableProperty] private bool _confirmMoveOpen;
@@ -844,6 +881,11 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _isPaused;
 
     public string PauseLabel => IsPaused ? "Riprendi" : "Pausa";
+
+    /// <summary>Consiglio sul Blocco automatico, quando non c'è un avviso più importante da mostrare.</summary>
+    public bool ShowTransferTip => TransferNotice is null;
+
+    partial void OnTransferNoticeChanged(string? value) => OnPropertyChanged(nameof(ShowTransferTip));
 
     partial void OnIsPausedChanged(bool value) => OnPropertyChanged(nameof(PauseLabel));
 
@@ -886,10 +928,39 @@ public sealed partial class MainViewModel : ObservableObject
         return RunTransferAsync(TransferMode.Move);
     }
 
+    [ObservableProperty] private bool _confirmDeleteOpen;
+    [ObservableProperty] private string _confirmDeleteTitle = "";
+    [ObservableProperty] private string _confirmDeleteText = "";
+    [ObservableProperty] private string? _confirmDeleteNotOnPc;
+
+    [RelayCommand(CanExecute = nameof(CanTransfer))]
+    private void Delete()
+    {
+        var sel = Selected;
+        if (sel.Count == 0) return;
+        int notOnPc = sel.Count(t => !t.IsOnPc);
+        ConfirmDeleteTitle = sel.Count == 1 ? "Eliminare 1 elemento dall'iPhone?" : $"Eliminare {sel.Count.ToString("N0", It)} elementi dall'iPhone?";
+        ConfirmDeleteText = $"{sel.Sum(t => t.Item.Files.Count).ToString("N0", It)} file ({TransferEngine.Format(sel.Sum(t => t.Item.TotalSize))}) " +
+                            "vengono tolti dal telefono, senza copiarli. Non è detto che passino da “Eliminati di recente”: considerala un'eliminazione definitiva.";
+        ConfirmDeleteNotOnPc = notOnPc == 0 ? null
+            : notOnPc == sel.Count ? (sel.Count == 1 ? "Questo elemento NON è sul PC: se lo elimini, lo perdi." : "Nessuno di questi è sul PC: se li elimini, li perdi.")
+            : $"{notOnPc.ToString("N0", It)} di questi NON sono sul PC: se li elimini, li perdi. Per tenerli usa Sposta.";
+        DeleteRefusedBefore = Device is not null && Settings.DeleteRefusedDevices.Contains(Device.Key);
+        ConfirmDeleteOpen = true;
+    }
+
+    [RelayCommand]
+    private Task ConfirmDeleteAsync()
+    {
+        ConfirmDeleteOpen = false;
+        return RunTransferAsync(TransferMode.Delete);
+    }
+
     [RelayCommand]
     private void CancelDialog()
     {
         ConfirmMoveOpen = false;
+        ConfirmDeleteOpen = false;
         ResultOpen = false;
     }
 
@@ -903,15 +974,20 @@ public sealed partial class MainViewModel : ObservableObject
         _transferCts = new CancellationTokenSource();
         _pause = new PauseController();
         IsPaused = false;
-        TransferTitle = (mode == TransferMode.Move ? "Sposto " : "Copio ") +
-                        (items.Count == 1 ? "1 elemento" : $"{items.Count.ToString("N0", It)} elementi") + " in " + Settings.DestinationRoot;
+        var what = items.Count == 1 ? "1 elemento" : $"{items.Count.ToString("N0", It)} elementi";
+        TransferTitle = mode switch
+        {
+            TransferMode.Delete => $"Elimino {what} dall'iPhone",
+            TransferMode.Move => $"Sposto {what} in {Settings.DestinationRoot}",
+            _ => $"Copio {what} in {Settings.DestinationRoot}",
+        };
         TransferFraction = 0;
         TransferDetail = "Preparo…";
         TransferCurrent = "";
         TransferNotice = null;
         TransferCounts = "";
         if (Settings.KeepAwake) KeepAwake.Set(true);
-        _log.Info($"{mode}: {items.Count} elementi verso {Settings.DestinationRoot}");
+        _log.Info(mode == TransferMode.Delete ? $"Delete: {items.Count} elementi" : $"{mode}: {items.Count} elementi verso {Settings.DestinationRoot}");
 
         // Un collegamento tutto suo: le miniature e le anteprime non rallentano la copia (e viceversa).
         // (Nella dimostrazione il telefono finto è uno solo e non regge due thread: si usa lo stesso collegamento.)
@@ -928,7 +1004,7 @@ public sealed partial class MainViewModel : ObservableObject
             }
             catch (DeviceException e)
             {
-                ShowResult("Trasferimento non partito", e.Message, problems: true, folder: null);
+                ShowResult(mode == TransferMode.Delete ? "Eliminazione non partita" : "Trasferimento non partito", e.Message, problems: true, folder: null);
                 return;
             }
 
@@ -937,7 +1013,10 @@ public sealed partial class MainViewModel : ObservableObject
             var progress = new Progress<TransferStatus>(OnTransferStatus);
             try
             {
-                report = await Task.Run(() => engine.RunAsync(items, mode, options, progress, _pause, _transferCts.Token));
+                var ct = _transferCts.Token;
+                report = mode == TransferMode.Delete
+                    ? await Task.Run(() => engine.DeleteAsync(items, options, progress, ct))
+                    : await Task.Run(() => engine.RunAsync(items, mode, options, progress, _pause, ct));
             }
             catch (Exception e)
             {
@@ -958,8 +1037,14 @@ public sealed partial class MainViewModel : ObservableObject
         ApplyReport(report);
     }
 
+    private TransferPhase _lastPhase;
+
     private void OnTransferStatus(TransferStatus s)
     {
+        // L'iPhone si è bloccato (o scollegato): chi è lontano dal PC deve accorgersene.
+        if (s.Phase == TransferPhase.WaitingForDevice && _lastPhase != TransferPhase.WaitingForDevice && !_demo)
+            Attention.Request(Application.Current.MainWindow);
+        _lastPhase = s.Phase;
         TransferFraction = s.Phase == TransferPhase.Deleting
             ? (s.ItemsTotal == 0 ? 1 : (double)s.ItemsDone / s.ItemsTotal)
             : s.BytesTotal > 0 ? Math.Clamp((double)s.BytesDone / s.BytesTotal, 0, 1) : (s.ItemsTotal == 0 ? 0 : (double)s.ItemsDone / s.ItemsTotal);
@@ -967,7 +1052,7 @@ public sealed partial class MainViewModel : ObservableObject
         {
             TransferPhase.Preparing => "Preparo…",
             TransferPhase.Deleting => $"Tolgo dal telefono: {s.ItemsDone.ToString("N0", It)} di {s.ItemsTotal.ToString("N0", It)}",
-            TransferPhase.WaitingForDevice => "In attesa dell'iPhone",
+            TransferPhase.WaitingForDevice => "In pausa: aspetto l'iPhone sbloccato",
             _ => $"{s.ItemsDone.ToString("N0", It)} di {s.ItemsTotal.ToString("N0", It)} · {TransferEngine.Format(s.BytesDone)} di {TransferEngine.Format(s.BytesTotal)}"
                  + (s.BytesPerSecond > 1 ? $" · {TransferEngine.Format((long)s.BytesPerSecond)}/s" : "")
                  + (s.Remaining is { } r ? " · " + Remaining(r) : ""),
@@ -1012,7 +1097,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (FocusedTile is { } focused && !_tiles.ContainsKey(focused.Item.Id)) FocusedTile = null; // tolto dal telefono
         RefreshFocused();
 
-        if (Device is not null && r.Mode == TransferMode.Move)
+        if (Device is not null && r.Mode is TransferMode.Move or TransferMode.Delete)
         {
             if (r.DeleteRefused && !Settings.DeleteRefusedDevices.Contains(Device.Key)) Settings.DeleteRefusedDevices.Add(Device.Key);
             if (r.Deleted > 0)
@@ -1028,12 +1113,27 @@ public sealed partial class MainViewModel : ObservableObject
         if (r.Skipped > 0) lines.AppendLine($"• {r.Skipped.ToString("N0", It)} erano già sul PC e non sono stati ricopiati.");
         if (r.Mode == TransferMode.Move)
         {
-            if (r.Deleted > 0) lines.AppendLine($"✓ {r.Deleted.ToString("N0", It)} tolti dall'iPhone (restano 30 giorni in \"Eliminati di recente\").");
+            if (r.Deleted > 0) lines.AppendLine($"✓ {r.Deleted.ToString("N0", It)} tolti dall'iPhone.");
             if (r.DeleteRefused)
                 lines.AppendLine("• L'iPhone non permette di cancellare da Windows: le copie sul PC ci sono, sul telefono è rimasto tutto. " +
                                  "Puoi cancellarli dall'app Foto: nella libreria hanno il bollino ✓ PC.");
             else if (r.DeleteFailed > 0) lines.AppendLine($"• {r.DeleteFailed.ToString("N0", It)} non tolti dal telefono (le copie sul PC ci sono).");
         }
+        if (r.Mode == TransferMode.Delete)
+        {
+            if (r.Deleted > 0) lines.AppendLine($"✓ {r.Deleted.ToString("N0", It)} elementi eliminati dall'iPhone.");
+            if (r.DeleteRefused)
+                lines.AppendLine("• L'iPhone non permette di eliminare da Windows: sul telefono è rimasto tutto. Puoi eliminarli dall'app Foto.");
+            else if (r.DeleteFailed > 0) lines.AppendLine($"• {r.DeleteFailed.ToString("N0", It)} non eliminati (sono ancora sul telefono).");
+            if (r.Canceled) lines.AppendLine("Eliminazione annullata: quelli non ancora eliminati sono rimasti sul telefono.");
+            var deleteTitle = r.Canceled ? "Eliminazione annullata"
+                : r.DeleteRefused ? "L'iPhone non ha permesso di eliminare"
+                : r.DeleteFailed > 0 ? "Fatto, con qualche problema"
+                : "Eliminati";
+            ShowResult(deleteTitle, lines.ToString().TrimEnd(), problems: r.DeleteRefused || r.DeleteFailed > 0, folder: null);
+            return;
+        }
+
         foreach (var f in r.Failed.Take(8)) lines.AppendLine($"✕ {f.Item.BaseName}: {f.Reason}");
         if (r.Failed.Count > 8) lines.AppendLine($"✕ … e altri {r.Failed.Count - 8} (dettagli nel registro).");
         if (r.ConversionWarnings.Count > 0) lines.AppendLine($"• {r.ConversionWarnings.Count} foto non convertite in JPG: copiato l'originale.");
@@ -1263,7 +1363,7 @@ public sealed partial class MainViewModel : ObservableObject
     public bool ConfirmClose()
     {
         if (!IsTransferring) return true;
-        var answer = MessageBox.Show("È in corso un trasferimento. Interromperlo e chiudere?\n\nQuello già copiato resta sul PC; dal telefono non verrà tolto niente.",
+        var answer = MessageBox.Show("È in corso un trasferimento. Interromperlo e chiudere?\n\nQuello già copiato resta sul PC; dal telefono non verrà tolto altro.",
             "Ponte iPhone", MessageBoxButton.YesNo, MessageBoxImage.Question);
         if (answer != MessageBoxResult.Yes) return false;
         _transferCts?.Cancel();

@@ -42,6 +42,11 @@ public static class ScreenshotRunner
                 Save(window, Path.Combine(folder, "2-conferma-sposta.png"));
                 vm.CancelDialogCommand.Execute(null);
 
+                vm.DeleteCommand.Execute(null);
+                await Settle(600);
+                Save(window, Path.Combine(folder, "2b-conferma-elimina.png"));
+                vm.CancelDialogCommand.Execute(null);
+
                 vm.DemoShowTransfer();
                 await Settle(600);
                 Save(window, Path.Combine(folder, "3-trasferimento.png"));

@@ -128,6 +128,43 @@ public static class KeepAwake
     private static extern uint SetThreadExecutionState(uint esFlags);
 }
 
+/// <summary>Richiama l'attenzione: icona lampeggiante sulla barra delle applicazioni e un suono.</summary>
+public static class Attention
+{
+    private const uint FLASHW_ALL = 3;
+    private const uint FLASHW_TIMERNOFG = 12; // finché la finestra non torna in primo piano
+
+    public static void Request(Window? window)
+    {
+        System.Media.SystemSounds.Exclamation.Play();
+        if (window is null) return;
+        var hwnd = new WindowInteropHelper(window).Handle;
+        if (hwnd == IntPtr.Zero || window.IsActive) return;
+        var info = new FLASHWINFO
+        {
+            cbSize = (uint)Marshal.SizeOf<FLASHWINFO>(),
+            hwnd = hwnd,
+            dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG,
+            uCount = uint.MaxValue,
+            dwTimeout = 0,
+        };
+        FlashWindowEx(ref info);
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FLASHWINFO
+    {
+        public uint cbSize;
+        public IntPtr hwnd;
+        public uint dwFlags;
+        public uint uCount;
+        public uint dwTimeout;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+}
+
 public static class Shell
 {
     public static bool Open(string target)

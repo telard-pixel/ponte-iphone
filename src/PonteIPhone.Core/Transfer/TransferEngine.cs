@@ -11,6 +11,8 @@ public enum TransferMode
     Copy,
     /// <summary>Copia, verifica e poi cancella dal telefono.</summary>
     Move,
+    /// <summary>Solo cancellazione dal telefono, senza copia (scelta esplicita dell'utente).</summary>
+    Delete,
 }
 
 public sealed record TransferOptions
@@ -190,7 +192,8 @@ public sealed class TransferEngine
             }
 
             if (mode == TransferMode.Move && _report.Safe.Count > 0)
-                await DeleteSafeItemsAsync(includeEdited, o, ct);
+                await DeleteItemsAsync(_report.Safe, item => item.FilesToCopy(includeEdited, o.IncludeSidecars)
+                    .All(f => AlreadyOnPc(f.File) is not null), ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -366,9 +369,6 @@ public sealed class TransferEngine
                     case DeviceErrorKind.NotFound:
                         _lastFailure = "il file non c'è più sul telefono";
                         return null;
-                    case DeviceErrorKind.Refused:
-                        _lastFailure = DeviceErrors.Describe(code);
-                        return null;
                     case DeviceErrorKind.Local:
                         throw new TransferAbortedException(DeviceErrors.Describe(code));
                     case DeviceErrorKind.Gone:
@@ -376,6 +376,20 @@ public sealed class TransferEngine
                         attempt--;
                         await WaitForDeviceAsync(ct);
                         continue;
+                }
+
+                // L'iPhone che si blocca da solo (Blocco automatico) non dà un errore suo: le letture
+                // falliscono con "accesso negato" o "periferica non funzionante". Prima di contare il
+                // tentativo, o di dare il file per rifiutato, si guarda se è solo bloccato.
+                if (await WaitIfLockedAsync(ct))
+                {
+                    attempt--;
+                    continue;
+                }
+                if (kind == DeviceErrorKind.Refused)
+                {
+                    _lastFailure = DeviceErrors.Describe(code);
+                    return null;
                 }
 
                 if (attempt >= _maxAttempts)
@@ -419,13 +433,37 @@ public sealed class TransferEngine
     }
 
     /// <summary>
+    /// Controlla se l'iPhone è scollegato o bloccato; in quel caso aspetta che torni pronto e restituisce true
+    /// (chi chiama riprova senza contare il tentativo). False: il telefono è lì e sbloccato, l'errore era un altro.
+    /// </summary>
+    private async Task<bool> WaitIfLockedAsync(CancellationToken ct)
+    {
+        try
+        {
+            var dev = (await _conn.ListDevicesAsync(ct)).FirstOrDefault(d => d.Key == _device.Key);
+            if (dev is not null)
+            {
+                var opened = await _conn.OpenAsync(dev.Id, ct);
+                if (opened.Ready) return false;
+                _log?.Info("L'iPhone risulta bloccato");
+            }
+        }
+        catch (DeviceException e)
+        {
+            _log?.Warn("Controllo dell'iPhone: " + e.Message);
+        }
+        await WaitForDeviceAsync(ct);
+        return true;
+    }
+
+    /// <summary>
     /// Aspetta che l'iPhone torni (ricollegato e sbloccato), lo riapre e rilegge l'elenco dei file:
     /// dopo un nuovo collegamento gli ID di Windows cambiano, i file si ritrovano per cartella, nome e dimensione.
     /// </summary>
     private async Task WaitForDeviceAsync(CancellationToken ct)
     {
         var previous = _phase;
-        SetPhase(TransferPhase.WaitingForDevice, "Ricollega e sblocca l'iPhone: la copia riprende da sola");
+        SetPhase(TransferPhase.WaitingForDevice, "Sblocca l'iPhone (o ricollegalo): si riprende da solo");
         _log?.Info("In attesa dell'iPhone");
         while (true)
         {
@@ -449,7 +487,7 @@ public sealed class TransferEngine
                         SetPhase(previous == TransferPhase.WaitingForDevice ? TransferPhase.Copying : previous, null);
                         return;
                     }
-                    _notice = "Sblocca l'iPhone (e tocca Autorizza se lo chiede): la copia riprende da sola";
+                    _notice = "Sblocca l'iPhone (e tocca Autorizza se lo chiede): si riprende da solo";
                     Report(force: true);
                 }
             }
@@ -549,14 +587,59 @@ public sealed class TransferEngine
 
     // ------------------------------------------------------------------ cancellazione dal telefono
 
-    private async Task DeleteSafeItemsAsync(bool includeEdited, TransferOptions o, CancellationToken ct)
+    /// <summary>
+    /// Solo cancellazione dal telefono (comando "Elimina"): niente copia, niente controllo che siano sul PC.
+    /// L'utente ha già confermato sapendo quanti elementi non hanno una copia.
+    /// </summary>
+    public async Task<TransferReport> DeleteAsync(IReadOnlyList<MediaItem> items, TransferOptions o,
+        IProgress<TransferStatus>? progress, CancellationToken ct)
     {
-        _itemsTotal = _report.Safe.Count;
+        var clock = Stopwatch.StartNew();
+        WithTiming(o);
+        _report = new TransferReport { Mode = TransferMode.Delete };
+        _progress = progress;
+        _ids.Clear();
+        foreach (var f in items.SelectMany(i => i.Files)) _ids[f.File.Key] = f.File.ObjectId;
+        try
+        {
+            await DeleteItemsAsync(items, mustBeOnPc: null, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _report.Canceled = true;
+            _log?.Info("Eliminazione annullata dall'utente");
+        }
+        finally
+        {
+            _report.Elapsed = clock.Elapsed;
+            SetPhase(TransferPhase.Done, null);
+        }
+        _log?.Info($"Eliminazione: {_report.Deleted} tolti dal telefono, {_report.DeleteFailed} non tolti" +
+                   (_report.DeleteRefused ? " (rifiutata dall'iPhone)" : ""));
+        return _report;
+    }
+
+    /// <param name="mustBeOnPc">Con Sposta: ultimo controllo che la copia sul PC ci sia ancora, intera.</param>
+    private async Task DeleteItemsAsync(IReadOnlyList<MediaItem> items, Func<MediaItem, bool>? mustBeOnPc, CancellationToken ct)
+    {
+        var deleting = mustBeOnPc is null ? "Tolgo dal telefono gli elementi scelti…" : "Tolgo dal telefono gli elementi copiati e verificati…";
+        _itemsTotal = items.Count;
         _itemsDone = 0;
-        SetPhase(TransferPhase.Deleting, "Tolgo dal telefono gli elementi copiati e verificati…");
-        var queue = new Queue<MediaItem>(_report.Safe);
+        SetPhase(TransferPhase.Deleting, deleting);
+        var queue = new Queue<MediaItem>(items);
         var retries = new Dictionary<MediaItem, int>();
         bool probed = false;
+
+        // Al terzo errore lo stesso elemento resta sul telefono. L'attesa dello sblocco non conta come errore.
+        void Requeue(IEnumerable<MediaItem> again, bool countAsError)
+        {
+            foreach (var item in again)
+            {
+                var n = countAsError ? (retries[item] = retries.GetValueOrDefault(item) + 1) : retries.GetValueOrDefault(item);
+                if (n < 3) queue.Enqueue(item);
+                else _report.DeleteFailed++;
+            }
+        }
 
         while (queue.Count > 0)
         {
@@ -565,9 +648,7 @@ public sealed class TransferEngine
             int take = probed ? Math.Min(20, queue.Count) : 1;
             var chunk = Enumerable.Range(0, take).Select(_ => queue.Dequeue()).ToList();
 
-            // Ultimo controllo: ogni file copiato deve essere ancora sul PC, intero.
-            var deletable = chunk.Where(i => i.FilesToCopy(includeEdited, o.IncludeSidecars)
-                .All(f => AlreadyOnPc(f.File) is not null)).ToList();
+            var deletable = mustBeOnPc is null ? chunk : chunk.Where(mustBeOnPc).ToList();
             foreach (var skipped in chunk.Except(deletable))
             {
                 _report.DeleteFailed++;
@@ -591,25 +672,18 @@ public sealed class TransferEngine
             {
                 _log?.Warn("Cancellazione: " + e.Message);
                 await WaitForDeviceAsync(ct);
-                SetPhase(TransferPhase.Deleting, "Tolgo dal telefono gli elementi copiati e verificati…");
-                foreach (var item in deletable)
-                {
-                    // Al terzo errore lo stesso elemento resta sul telefono (le copie sul PC ci sono).
-                    var n = retries[item] = retries.GetValueOrDefault(item) + 1;
-                    if (n < 3) queue.Enqueue(item);
-                    else _report.DeleteFailed++;
-                }
+                SetPhase(TransferPhase.Deleting, deleting);
+                Requeue(deletable, countAsError: true);
                 continue;
             }
 
             var byId = results.GroupBy(r => r.ObjectId).ToDictionary(g => g.Key, g => g.Last());
+            var failed = new List<(MediaItem Item, bool Refused)>();
             foreach (var item in deletable)
             {
                 var mine = ids.Where(x => x.Item == item).ToList();
                 bool primaryOk = mine.Where(x => x.File.Role == FileRole.Primary)
                     .All(x => byId.TryGetValue(x.Id, out var r) && (r.Ok || DeviceErrors.IsNotFound(r.HResult)));
-                bool refused = mine.Any(x => byId.TryGetValue(x.Id, out var r) && r.Refused);
-
                 if (primaryOk)
                 {
                     _report.Deleted++;
@@ -618,18 +692,40 @@ public sealed class TransferEngine
                 }
                 else
                 {
-                    _report.DeleteFailed++;
-                    if (refused && !probed)
+                    failed.Add((item, mine.Any(x => byId.TryGetValue(x.Id, out var r) && r.Refused)));
+                }
+            }
+
+            if (failed.Count > 0)
+            {
+                // Un iPhone che si è bloccato a metà rifiuta come uno che non lo permette mai:
+                // se era bloccato si aspetta lo sblocco e si riprova, senza concludere niente.
+                if (await WaitIfLockedAsync(ct))
+                {
+                    SetPhase(TransferPhase.Deleting, deleting);
+                    Requeue(failed.Select(f => f.Item), countAsError: false);
+                    // Se non è passato niente, il prossimo giro rifà la prova con un elemento solo.
+                    if (failed.Count == deletable.Count && !probed)
                     {
-                        _report.DeleteRefused = true;
-                        _log?.Warn("L'iPhone rifiuta la cancellazione da Windows: mi fermo, le copie sul PC restano");
-                        _report.DeleteFailed += queue.Count;
-                        return;
+                        _itemsDone = Math.Min(_itemsTotal, _report.Deleted + _report.DeleteFailed);
+                        Report(force: true);
+                        continue;
                     }
+                }
+                else if (!probed && failed.Any(f => f.Refused))
+                {
+                    _report.DeleteRefused = true;
+                    _report.DeleteFailed += failed.Count + queue.Count;
+                    _log?.Warn("L'iPhone rifiuta la cancellazione da Windows: mi fermo" + (mustBeOnPc is null ? "" : ", le copie sul PC restano"));
+                    return;
+                }
+                else
+                {
+                    _report.DeleteFailed += failed.Count;
                 }
             }
             probed = true;
-            _itemsDone = _report.Deleted + _report.DeleteFailed;
+            _itemsDone = Math.Min(_itemsTotal, _report.Deleted + _report.DeleteFailed);
             Report(force: true);
         }
     }

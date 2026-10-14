@@ -30,6 +30,13 @@ public sealed class FakeBackend : IDeviceBackend
     public int TruncateDownloads;
     /// <summary>Le prossime N letture risultano "telefono scollegato" e il telefono sparisce dall'elenco.</summary>
     public int DisconnectDuringDownloads;
+    /// <summary>
+    /// Le prossime N letture si interrompono perché l'iPhone si blocca da solo (Blocco automatico):
+    /// "accesso negato", e da lì il telefono resta bloccato finché il test non lo sblocca.
+    /// </summary>
+    public int LockDuringDownloads;
+    /// <summary>La prossima cancellazione trova l'iPhone appena bloccato: tutto "accesso negato".</summary>
+    public bool LockOnNextDelete;
     /// <summary>Il telefono rifiuta le cancellazioni (come potrebbe fare iOS).</summary>
     public bool RefuseDelete;
     /// <summary>Il telefono è bloccato: si vede ma la memoria è vuota.</summary>
@@ -93,7 +100,8 @@ public sealed class FakeBackend : IDeviceBackend
         bool fail = !hang && Take(ref FailDownloads);
         bool truncate = !hang && !fail && Take(ref TruncateDownloads);
         bool disconnect = !hang && !fail && !truncate && Take(ref DisconnectDuringDownloads);
-        long stopAt = truncate || fail || disconnect || hang ? data.Length / 2 : data.Length;
+        bool locks = !hang && !fail && !truncate && !disconnect && Take(ref LockDuringDownloads);
+        long stopAt = truncate || fail || disconnect || hang || locks ? data.Length / 2 : data.Length;
         var started = DateTime.UtcNow;
 
         while (written < stopAt)
@@ -120,6 +128,11 @@ public sealed class FakeBackend : IDeviceBackend
             throw new DeviceException("Blocco simulato terminato", DeviceErrors.GenFailure);
         }
         if (fail) throw new DeviceException("Errore simulato del driver", FailDownloadsCode);
+        if (locks)
+        {
+            Locked = true;
+            throw new DeviceException("Bloccato durante la copia", DeviceErrors.AccessDenied);
+        }
         if (disconnect)
         {
             Unplugged = true;
@@ -134,6 +147,12 @@ public sealed class FakeBackend : IDeviceBackend
     public IReadOnlyList<DeleteResult> Delete(IReadOnlyList<string> objectIds)
     {
         EnsureReady();
+        if (LockOnNextDelete)
+        {
+            LockOnNextDelete = false;
+            Locked = true;
+            return objectIds.Select(id => new DeleteResult(id, false, DeviceErrors.AccessDenied)).ToList();
+        }
         var results = new List<DeleteResult>();
         foreach (var id in objectIds)
         {

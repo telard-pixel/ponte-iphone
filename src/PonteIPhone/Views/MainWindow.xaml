@@ -417,6 +417,14 @@
                 <TextBlock TextAlignment="Center" TextWrapping="Wrap" Style="{StaticResource Caption}" FontSize="13"
                            Text="Il telefono è collegato ma non mostra le foto. Sbloccalo e, se compare “Autorizzare questo computer?”, tocca Autorizza. L'app riprova da sola ogni pochi secondi." />
                 <ui:ProgressRing IsIndeterminate="True" Width="28" Height="28" Margin="0,22,0,0" HorizontalAlignment="Center" />
+                <Border Background="{DynamicResource SystemFillColorCautionBackgroundBrush}" CornerRadius="6" Padding="14,10" Margin="0,22,0,0"
+                        Visibility="{Binding LockedForAWhile, Converter={StaticResource BoolToVis}}">
+                    <StackPanel>
+                        <TextBlock FontWeight="SemiBold" TextWrapping="Wrap" Text="È già sbloccato e non succede niente?" />
+                        <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,3,0,0"
+                                   Text="Scollega il cavo e ricollegalo con l'iPhone sbloccato. Serve quasi sempre dopo aver installato Dispositivi Apple, o se il telefono era collegato prima di accendere il PC." />
+                    </StackPanel>
+                </Border>
             </StackPanel>
 
             <!-- ························ centro: senza Rullino ························ -->
@@ -655,6 +663,8 @@
                 <!-- selezione e comandi -->
                 <DockPanel Visibility="{Binding ShowActions, Converter={StaticResource BoolToVis}}" MinHeight="44">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                        <ui:Button Content="Elimina…" MinWidth="96" Margin="0,0,8,0" Command="{Binding DeleteCommand}"
+                                   ToolTip="Toglie dal telefono gli elementi scelti, senza copiarli (tasto Canc)" />
                         <ui:Button Content="Copia" MinWidth="96" Margin="0,0,8,0" Command="{Binding CopyCommand}" ToolTip="Copia sul PC, lascia tutto sul telefono" />
                         <ui:Button Content="Sposta" MinWidth="96" Appearance="Primary" Command="{Binding MoveCommand}"
                                    ToolTip="Copia sul PC, verifica, poi toglie dal telefono" />
@@ -692,6 +702,9 @@
                     <TextBlock Text="{Binding TransferNotice}" Margin="0,4,0,0" FontSize="12" TextWrapping="Wrap"
                                Foreground="{DynamicResource SystemFillColorCautionBrush}"
                                Visibility="{Binding TransferNotice, Converter={StaticResource NotNullToVis}}" />
+                    <TextBlock Margin="0,4,0,0" Style="{StaticResource Caption}" TextWrapping="Wrap"
+                               Visibility="{Binding ShowTransferTip, Converter={StaticResource BoolToVis}}"
+                               Text="Tieni l'iPhone sbloccato fino alla fine (Impostazioni › Schermo e luminosità › Blocco automatico › Mai). Se si blocca, si mette in pausa e riprende da solo appena lo sblocchi." />
                     <TextBlock Text="{Binding TransferCounts}" Margin="0,4,0,0" FontSize="12" Foreground="{DynamicResource SystemFillColorSuccessBrush}" />
                 </StackPanel>
             </Grid>
@@ -705,7 +718,7 @@
                         <TextBlock Text="{Binding ConfirmTitle}" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,12" />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" Text="{Binding ConfirmFiles}" />
                         <TextBlock TextWrapping="Wrap" Margin="0,0,0,6"
-                                   Text="Solo dopo la verifica vengono tolti dall'iPhone, e restano 30 giorni in “Eliminati di recente”. Se qualcosa va storto, quell'elemento rimane sul telefono." />
+                                   Text="Solo dopo la verifica vengono tolti dall'iPhone. Se qualcosa va storto, quell'elemento rimane sul telefono." />
                         <Border Background="{DynamicResource SystemFillColorCautionBackgroundBrush}" CornerRadius="6" Padding="12,9" Margin="0,8,0,0">
                             <TextBlock TextWrapping="Wrap" FontSize="12.5">
                                 <Run Text="Foto di iCloud attivo?" FontWeight="SemiBold" /> <Run Text="Allora vengono tolti anche da iCloud e dagli altri tuoi dispositivi. Le copie sul PC restano." />
@@ -722,6 +735,39 @@
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <ui:Button Content="Annulla" MinWidth="96" Margin="0,0,8,0" Command="{Binding CancelDialogCommand}" />
                             <ui:Button Content="Sposta" MinWidth="96" Appearance="Primary" Command="{Binding ConfirmMoveCommand}" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- ============================ conferma Elimina ============================ -->
+        <Grid Grid.RowSpan="4" Style="{StaticResource Overlay}" Visibility="{Binding ConfirmDeleteOpen, Converter={StaticResource BoolToVis}}">
+            <Border Style="{StaticResource DialogCard}">
+                <StackPanel>
+                    <StackPanel Margin="24,22,24,18">
+                        <TextBlock Text="{Binding ConfirmDeleteTitle}" FontSize="20" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,0,0,12" />
+                        <TextBlock TextWrapping="Wrap" Margin="0,0,0,6" Text="{Binding ConfirmDeleteText}" />
+                        <Border Background="{DynamicResource SystemFillColorCriticalBackgroundBrush}" CornerRadius="6" Padding="12,9" Margin="0,8,0,0"
+                                Visibility="{Binding ConfirmDeleteNotOnPc, Converter={StaticResource NotNullToVis}}">
+                            <TextBlock TextWrapping="Wrap" FontSize="12.5" FontWeight="SemiBold" Text="{Binding ConfirmDeleteNotOnPc}" />
+                        </Border>
+                        <Border Background="{DynamicResource SystemFillColorCautionBackgroundBrush}" CornerRadius="6" Padding="12,9" Margin="0,8,0,0">
+                            <TextBlock TextWrapping="Wrap" FontSize="12.5">
+                                <Run Text="Foto di iCloud attivo?" FontWeight="SemiBold" /> <Run Text="Allora vengono tolti anche da iCloud e dagli altri tuoi dispositivi." />
+                            </TextBlock>
+                        </Border>
+                        <Border Background="{DynamicResource SystemFillColorCriticalBackgroundBrush}" CornerRadius="6" Padding="12,9" Margin="0,8,0,0"
+                                Visibility="{Binding DeleteRefusedBefore, Converter={StaticResource BoolToVis}}">
+                            <TextBlock TextWrapping="Wrap" FontSize="12.5"
+                                       Text="L'ultima volta questo iPhone non ha permesso di cancellare da Windows: probabilmente non succederà niente." />
+                        </Border>
+                    </StackPanel>
+                    <Border Background="{DynamicResource LayerFillColorDefaultBrush}" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
+                            Padding="24,14" CornerRadius="0,0,8,8">
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <ui:Button Content="Annulla" MinWidth="96" Margin="0,0,8,0" Command="{Binding CancelDialogCommand}" />
+                            <ui:Button Content="Elimina dall'iPhone" MinWidth="96" Appearance="Danger" Command="{Binding ConfirmDeleteCommand}" />
                         </StackPanel>
                     </Border>
                 </StackPanel>

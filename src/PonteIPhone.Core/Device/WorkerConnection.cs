@@ -247,6 +247,20 @@ public sealed class WorkerConnection : IDeviceConnection
         }
     }
 
+    /// <summary>
+    /// Chiude il processo attuale: la chiamata successiva ne avvia uno nuovo, con un collegamento WPD
+    /// fresco. Serve quando il telefono sembra bloccato da troppo tempo anche se è già sbloccato
+    /// (Windows a volte continua a mostrare la memoria vuota alla stessa sessione). Da chiamare senza chiamate in corso.
+    /// </summary>
+    public void Restart(string reason)
+    {
+        if (_session is { Dead: false } s)
+        {
+            _log?.Invoke("Nuovo processo per l'iPhone: " + reason);
+            Kill(s, reason);
+        }
+    }
+
     // ---------------------------------------------------------------- chiamate
 
     private async Task<JsonElement?> CallAsync(WireRequest req, TimeSpan timeout, CancellationToken ct,
