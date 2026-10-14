@@ -18,6 +18,7 @@ public sealed class FakeAppleDevice : IDisposable
 {
     public const string Udid = "00008110-001A2B3C4D5E6F70";
     private const int DeviceId = 7;
+    private const int WifiDeviceId = 8;
     private const int AfcPort = 49152;
 
     private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
@@ -27,6 +28,8 @@ public sealed class FakeAppleDevice : IDisposable
     public Dictionary<string, byte[]> Files { get; } = new(StringComparer.Ordinal);
     public bool Locked { get; set; }
     public bool ServePairRecord { get; set; } = true;
+    public bool Usb { get; set; } = true;
+    public bool Wifi { get; set; }
     public int SessionsWithClientCert;
 
     public FakeAppleDevice()
@@ -99,22 +102,14 @@ public sealed class FakeAppleDevice : IDisposable
         switch (msg.GetString("MessageType"))
         {
             case "ListDevices":
-                MuxReply(s, tag, new Dictionary<string, object>
-                {
-                    ["DeviceList"] = new List<object>
-                    {
-                        new Dictionary<string, object>
-                        {
-                            ["DeviceID"] = (long)DeviceId,
-                            ["MessageType"] = "Attached",
-                            ["Properties"] = new Dictionary<string, object>
-                            {
-                                ["ConnectionType"] = "USB", ["DeviceID"] = (long)DeviceId, ["SerialNumber"] = Udid,
-                            },
-                        },
-                    },
-                });
+            {
+                // Come il servizio vero: col Wi-Fi attivo lo stesso iPhone compare due volte, con due DeviceID.
+                var list = new List<object>();
+                if (Wifi) list.Add(Entry(WifiDeviceId, "Network"));
+                if (Usb) list.Add(Entry(DeviceId, "USB"));
+                MuxReply(s, tag, new Dictionary<string, object> { ["DeviceList"] = list });
                 break;
+            }
             case "ReadPairRecord":
                 MuxReply(s, tag, ServePairRecord
                     ? new Dictionary<string, object> { ["PairRecordData"] = PairRecordXml }
@@ -124,7 +119,9 @@ public sealed class FakeAppleDevice : IDisposable
             {
                 var raw = (int)(msg.GetLong("PortNumber") ?? 0);
                 int port = ((raw & 0xFF) << 8) | ((raw >> 8) & 0xFF);
-                bool ok = msg.GetLong("DeviceID") == DeviceId && port is LockdownClient.Port or AfcPort;
+                var id = msg.GetLong("DeviceID");
+                if (id == WifiDeviceId) Interlocked.Increment(ref WifiConnections);
+                bool ok = ((id == DeviceId && Usb) || (id == WifiDeviceId && Wifi)) && port is LockdownClient.Port or AfcPort;
                 MuxReply(s, tag, new Dictionary<string, object> { ["MessageType"] = "Result", ["Number"] = ok ? 0L : 3L });
                 if (!ok) return;
                 if (port == LockdownClient.Port) ServeLockdown(s);
@@ -133,6 +130,15 @@ public sealed class FakeAppleDevice : IDisposable
             }
         }
     }
+
+    public int WifiConnections;
+
+    private static Dictionary<string, object> Entry(int id, string type) => new()
+    {
+        ["DeviceID"] = (long)id,
+        ["MessageType"] = "Attached",
+        ["Properties"] = new Dictionary<string, object> { ["ConnectionType"] = type, ["DeviceID"] = (long)id, ["SerialNumber"] = Udid },
+    };
 
     private static void MuxReply(Stream s, int tag, Dictionary<string, object> msg)
     {

@@ -111,6 +111,42 @@ public sealed class AppleTests : IDisposable
     }
 
     [Fact]
+    public void CableIsPreferredAndWifiWorksAlone()
+    {
+        _phone.Wifi = true;
+        using var backend = new AppleBackend(_phone.Client());
+        var both = Assert.Single(backend.ListDevices());
+        Assert.False(both.IsWifi);
+        Assert.False(backend.Open(both.Id).Device.IsWifi);
+        Assert.Equal(0, _phone.WifiConnections);
+
+        _phone.Usb = false; // cavo staccato
+        var wifi = Assert.Single(backend.ListDevices());
+        Assert.Equal(both.Id, wifi.Id); // stesso telefono per l'app
+        Assert.True(wifi.IsWifi);
+        var opened = backend.Open(wifi.Id);
+        Assert.Equal(OpenState.Ready, opened.State);
+        Assert.True(opened.Device.IsWifi);
+        Assert.True(_phone.WifiConnections > 0);
+        var res = backend.Download("/DCIM/100APPLE/IMG_0002.JPG", Path.Combine(_dir, "w.part"), _ => { }, CancellationToken.None);
+        Assert.Equal(_phone.Files["/DCIM/100APPLE/IMG_0002.JPG"].Length, res.Bytes);
+    }
+
+    [Fact]
+    public void WifiFailureDoesNotFallBackToWindows()
+    {
+        _phone.Usb = false;
+        _phone.Wifi = true;
+        _phone.ServePairRecord = false;
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client()), () => new FakeBackend());
+        var dev = Assert.Single(backend.ListDevices());
+
+        // Windows vedrebbe un altro telefono (quello finto col cavo): non va scambiato per questo.
+        var e = Assert.Throws<DeviceException>(() => backend.Open(dev.Id));
+        Assert.Contains("Wi-Fi", e.Message);
+    }
+
+    [Fact]
     public void LockedPhoneIsReportedAsLocked()
     {
         _phone.Locked = true;

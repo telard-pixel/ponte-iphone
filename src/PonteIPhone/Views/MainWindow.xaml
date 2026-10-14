@@ -346,7 +346,7 @@
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowNoDevice, Converter={StaticResource BoolToVis}}">
                 <StackPanel MaxWidth="500" Margin="32" VerticalAlignment="Center" HorizontalAlignment="Center">
                     <TextBlock Text="Collega l'iPhone con il cavo USB" FontSize="26" FontWeight="SemiBold" TextWrapping="Wrap" />
-                    <TextBlock Text="La libreria compare da sola appena il telefono è pronto." Style="{StaticResource Caption}" FontSize="13" Margin="0,6,0,22" />
+                    <TextBlock Text="La libreria compare da sola appena il telefono è pronto (col cavo o in Wi-Fi)." Style="{StaticResource Caption}" FontSize="13" Margin="0,6,0,22" TextWrapping="Wrap" />
 
                     <Grid Margin="0,0,0,14">
                         <Grid.ColumnDefinitions>
@@ -392,6 +392,21 @@
                             <Run Text="Se l'iPhone chiede “Autorizzare questo computer?”, tocca" /> <Run Text="Autorizza" FontWeight="SemiBold" /> <Run Text="e inserisci il codice." />
                         </TextBlock>
                     </Grid>
+                    <Border Style="{StaticResource SettingCard}" Margin="0,10,0,0">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="32" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Style="{StaticResource Icon}" Text="&#xE701;" FontSize="18" VerticalAlignment="Top" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
+                            <StackPanel Grid.Column="1">
+                                <TextBlock FontWeight="SemiBold" TextWrapping="Wrap" Text="Senza cavo, in Wi-Fi" />
+                                <TextBlock Style="{StaticResource Caption}" Margin="0,3,0,0" TextWrapping="Wrap"
+                                           Text="Una volta sola: collega l'iPhone col cavo, apri Dispositivi Apple, scegli il telefono e attiva l'opzione per mostrarlo quando è in Wi-Fi, poi Applica. Da lì basta che PC e iPhone siano sulla stessa rete Wi-Fi e l'iPhone sbloccato (meglio se in carica). In Wi-Fi si copia, ma per eliminare serve il cavo." />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
                     <Border Style="{StaticResource SettingCard}" Margin="0,10,0,0">
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -729,6 +744,11 @@
                             <TextBlock TextWrapping="Wrap" FontSize="12.5"
                                        Text="L'ultima volta questo iPhone non ha permesso di cancellare da Windows: probabilmente verranno solo copiati." />
                         </Border>
+                        <Border Background="{DynamicResource SystemFillColorCriticalBackgroundBrush}" CornerRadius="6" Padding="12,9" Margin="0,8,0,0"
+                                Visibility="{Binding IsWifi, Converter={StaticResource BoolToVis}}">
+                            <TextBlock TextWrapping="Wrap" FontSize="12.5"
+                                       Text="L'iPhone è collegato in Wi-Fi: verranno copiati, ma per toglierli dal telefono serve il cavo." />
+                        </Border>
                     </StackPanel>
                     <Border Background="{DynamicResource LayerFillColorDefaultBrush}" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"
                             Padding="24,14" CornerRadius="0,0,8,8">
@@ -761,6 +781,11 @@
                                 Visibility="{Binding DeleteRefusedBefore, Converter={StaticResource BoolToVis}}">
                             <TextBlock TextWrapping="Wrap" FontSize="12.5"
                                        Text="L'ultima volta questo iPhone non ha permesso di cancellare da Windows: probabilmente non succederà niente." />
+                        </Border>
+                        <Border Background="{DynamicResource SystemFillColorCriticalBackgroundBrush}" CornerRadius="6" Padding="12,9" Margin="0,8,0,0"
+                                Visibility="{Binding IsWifi, Converter={StaticResource BoolToVis}}">
+                            <TextBlock TextWrapping="Wrap" FontSize="12.5"
+                                       Text="L'iPhone è collegato in Wi-Fi: per eliminare serve il cavo. Collegalo e riprova." />
                         </Border>
                     </StackPanel>
                     <Border Background="{DynamicResource LayerFillColorDefaultBrush}" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource DividerStrokeColorDefaultBrush}"

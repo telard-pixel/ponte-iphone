@@ -123,6 +123,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     partial void OnDeviceChanged(DeviceInfo? value)
     {
+        OnPropertyChanged(nameof(IsWifi));
         OnPropertyChanged(nameof(DeviceName));
         OnPropertyChanged(nameof(DeviceModel));
         OnPropertyChanged(nameof(DeviceStatus));
@@ -147,8 +148,11 @@ public sealed partial class MainViewModel : ObservableObject
         AppScreen.Locked => "Bloccato: sbloccalo",
         AppScreen.NoCameraRoll => "Collegato, senza foto",
         AppScreen.Loading => "Lettura in corso…",
-        _ => IsTransferring ? "Trasferimento in corso" : "Collegato via USB",
+        _ => IsTransferring ? "Trasferimento in corso" : IsWifi ? "Collegato via Wi-Fi" : "Collegato via USB",
     };
+
+    /// <summary>Collegato col servizio Apple in Wi-Fi: si copia, ma per cancellare serve il cavo.</summary>
+    public bool IsWifi => Device?.IsWifi == true;
 
     public bool HasStorage => Storage is { Capacity: > 0 };
     public string StorageText => Storage is { Capacity: > 0 } s
@@ -181,7 +185,8 @@ public sealed partial class MainViewModel : ObservableObject
     private async Task PollAsync()
     {
         // Senza telefono (o bloccato) si ricontrolla ogni 3 secondi: le notifiche di Windows a volte non arrivano.
-        if (IsTransferring || Screen is AppScreen.Library or AppScreen.Loading) return;
+        // In Wi-Fi Windows non avvisa quando il telefono se ne va (o torna sul cavo): si controlla anche con la libreria aperta.
+        if (IsTransferring || (Screen is AppScreen.Library or AppScreen.Loading && !IsWifi)) return;
         await RefreshDevicesAsync();
     }
 
@@ -205,7 +210,18 @@ public sealed partial class MainViewModel : ObservableObject
 
             if (Device is { } current && Screen is AppScreen.Library or AppScreen.Loading)
             {
-                if (list.Any(d => d.Id == current.Id)) return;
+                if (list.FirstOrDefault(d => d.Id == current.Id) is { } same)
+                {
+                    // Cavo staccato con il Wi-Fi attivo (o il contrario): stesso telefono, altra strada.
+                    if (same.Connection != current.Connection && same.Connection.Length > 0)
+                    {
+                        // Il collegamento vecchio è caduto con il cavo: si riapre dalla strada nuova.
+                        _log.Info($"iPhone ora collegato {(same.IsWifi ? "in Wi-Fi" : "col cavo")}: riapro");
+                        CloseLibrary();
+                        await OpenDeviceAsync(same);
+                    }
+                    return;
+                }
                 _log.Info("iPhone scollegato");
                 CloseLibrary();
                 Screen = AppScreen.NoDevice;

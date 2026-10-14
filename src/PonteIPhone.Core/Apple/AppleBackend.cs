@@ -31,12 +31,17 @@ public sealed partial class AppleBackend : IDeviceBackend
         _mux = mux ?? new UsbmuxClient();
     }
 
+    /// <summary>Un telefono per UDID: col cavo se c'è, altrimenti in Wi-Fi.</summary>
     public IReadOnlyList<DeviceInfo> ListDevices() =>
         _mux.ListDevices()
-            .Where(d => !d.ConnectionType.Equals("Network", StringComparison.OrdinalIgnoreCase))
-            .GroupBy(d => d.Udid).Select(g => g.First())
-            .Select(d => new DeviceInfo(IdPrefix + d.Udid, "", "Apple Inc.", "iPhone", d.Udid, ""))
+            .GroupBy(d => d.Udid).Select(Best)
+            .Select(d => new DeviceInfo(IdPrefix + d.Udid, "", "Apple Inc.", "iPhone", d.Udid, "", d.ConnectionType))
             .ToList();
+
+    private static bool IsNetwork(UsbmuxDevice d) => d.ConnectionType.Equals("Network", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Il cavo è più veloce e permette di cancellare: si preferisce sempre al Wi-Fi.</summary>
+    private static UsbmuxDevice Best(IEnumerable<UsbmuxDevice> same) => same.OrderBy(IsNetwork).First();
 
     public OpenResult Open(string deviceId)
     {
@@ -46,8 +51,9 @@ public sealed partial class AppleBackend : IDeviceBackend
         UsbmuxDevice dev;
         try
         {
-            dev = _mux.ListDevices().FirstOrDefault(d => d.Udid == udid && !d.ConnectionType.Equals("Network", StringComparison.OrdinalIgnoreCase))
-                  ?? throw new DeviceException("iPhone non collegato", DeviceErrors.DeviceNotConnected);
+            var same = _mux.ListDevices().Where(d => d.Udid == udid).ToList();
+            if (same.Count == 0) throw new DeviceException("iPhone non collegato", DeviceErrors.DeviceNotConnected);
+            dev = Best(same);
         }
         catch (UsbmuxException e)
         {
@@ -55,7 +61,7 @@ public sealed partial class AppleBackend : IDeviceBackend
         }
 
         var pair = ReadPair(udid);
-        var info = new DeviceInfo(deviceId, "", "Apple Inc.", "iPhone", udid, "");
+        var info = new DeviceInfo(deviceId, "", "Apple Inc.", "iPhone", udid, "", dev.ConnectionType);
         if (pair is null)
         {
             // Mai toccato "Autorizza" su questo PC (o abbinamento non leggibile): ci pensa WPD.
@@ -89,7 +95,8 @@ public sealed partial class AppleBackend : IDeviceBackend
                 "Apple Inc.",
                 values.GetString("ProductType") is { Length: > 0 } pt ? pt : "iPhone",
                 udid,
-                values.GetString("ProductVersion") ?? "");
+                values.GetString("ProductVersion") ?? "",
+                dev.ConnectionType);
 
             (int Port, bool Ssl) service;
             try
@@ -164,7 +171,7 @@ public sealed partial class AppleBackend : IDeviceBackend
         {
             throw new DeviceException("Dialogo con l'iPhone interrotto: " + e.Message, DeviceErrors.GenFailure, e);
         }
-        _notes.Add($"Canale Apple: {info.Model} iOS {info.Firmware}, " + (_afcEncrypted ? "AFC cifrato" : "AFC"));
+        _notes.Add($"Canale Apple: {info.Model} iOS {info.Firmware}, " + (_afcEncrypted ? "AFC cifrato" : "AFC") + (info.IsWifi ? ", via Wi-Fi" : ", via USB"));
         return new OpenResult(info, storage, state, _notes.ToList());
     }
 

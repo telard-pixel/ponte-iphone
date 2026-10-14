@@ -69,6 +69,11 @@ public sealed class SmartBackend : IDeviceBackend
         {
             throw;
         }
+        catch (Exception e) when (e is not OperationCanceledException && IsWifiOnly(deviceId))
+        {
+            // In Wi-Fi Windows non vede il telefono: non c'è una via di riserva.
+            throw new DeviceException("Collegamento in Wi-Fi non riuscito (" + e.Message + "): prova col cavo", DeviceErrors.NotReady, e);
+        }
         catch (Exception e) when (e is not OperationCanceledException)
         {
             // Il servizio Apple c'è ma non va per questo telefono: si prova la via di Windows.
@@ -84,6 +89,12 @@ public sealed class SmartBackend : IDeviceBackend
                 Notes = [.. (r.Notes ?? Array.Empty<string>()), "Canale Apple non riuscito: " + e.Message, "Canale: Windows (WPD)"],
             };
         }
+    }
+
+    private bool IsWifiOnly(string deviceId)
+    {
+        try { return _apple.ListDevices().FirstOrDefault(d => d.Id == deviceId)?.IsWifi == true; }
+        catch (Exception e) when (e is not OperationCanceledException) { return false; }
     }
 
     private IDeviceBackend Active => _active ?? throw new DeviceException("iPhone non aperto", DeviceErrors.WpdDeviceNotOpen);

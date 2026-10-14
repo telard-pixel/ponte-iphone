@@ -2,9 +2,13 @@ using System.Text.Json.Serialization;
 
 namespace PonteIPhone.Core.Model;
 
-/// <summary>Un telefono visto da Windows (WPD).</summary>
-public sealed record DeviceInfo(string Id, string Name, string Manufacturer, string Model, string Serial, string Firmware)
+/// <summary>Un telefono visto da Windows (WPD) o dal servizio Apple.</summary>
+/// <param name="Connection">"USB" o "Network" (Wi-Fi) per il servizio Apple; vuoto con WPD (sempre USB).</param>
+public sealed record DeviceInfo(string Id, string Name, string Manufacturer, string Model, string Serial, string Firmware, string Connection = "")
 {
+    [JsonIgnore]
+    public bool IsWifi => Connection.Equals("Network", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Identità stabile del telefono per il registro delle copie: il numero di serie se il driver lo dà,
     /// altrimenti l'ID di Windows (che cambia se si usa un'altra porta USB, ma resta meglio di niente).

@@ -74,7 +74,7 @@ public static class DeviceErrors
         WorkerRestarted => "l'iPhone non rispondeva: collegamento riaperto",
         SizeMismatch => "il file è arrivato incompleto",
         VerifyFailed => "la copia sul disco non corrisponde a quella arrivata",
-        NoWpdMatch => "Windows non mostra questo file (serve per cancellare): scollega e ricollega l'iPhone sbloccato",
+        NoWpdMatch => "per eliminare serve l'iPhone collegato col cavo e sbloccato (in Wi-Fi si può solo copiare); se lo è già, scollegalo e ricollegalo",
         0 => "errore sconosciuto",
         _ => $"errore 0x{hr:X8}",
     };
