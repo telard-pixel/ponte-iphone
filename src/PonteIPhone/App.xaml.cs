@@ -13,6 +13,7 @@ public partial class App : Application
     private readonly AppLog _log;
     private readonly bool _demo;
     private readonly string? _screenshots;
+    private MainViewModel? _vm;
 
     public App(AppLog log, bool demo, string? screenshots)
     {
@@ -32,6 +33,7 @@ public partial class App : Application
 
         var settings = AppSettings.Load(AppPaths.Settings);
         var vm = new MainViewModel(settings, _log, _demo);
+        _vm = vm;
         var window = new MainWindow(vm);
         MainWindow = window;
 
@@ -47,6 +49,7 @@ public partial class App : Application
     private void OnUnhandled(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         _log.Error("Errore nell'interfaccia", e.Exception);
+        try { _vm?.ReportProblem("errore imprevisto: " + e.Exception.GetType().Name); } catch { }
         // In modalità schermate un errore deve far fallire la CI, non restare nascosto.
         if (_screenshots is not null)
         {

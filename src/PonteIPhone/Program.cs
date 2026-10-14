@@ -36,7 +36,14 @@ public static class Program
         var log = new AppLog(AppPaths.Logs);
         if (args.Length >= 2 && args[0] == "--installa")
         {
-            UpdateInstaller.Run(args[1], args.ElementAtOrDefault(2), args.ElementAtOrDefault(3), log);
+            UpdateInstaller.Run(args[1], args.ElementAtOrDefault(2), args.ElementAtOrDefault(3), log, silent: args.Contains("--silenzioso"));
+            return 0;
+        }
+        if (args.Contains("--solo-prova"))
+        {
+            // Aggiornamento installato alla chiusura: basta dimostrare che la versione nuova parte.
+            log.Info($"Versione {UpdateService.Current} installata (prova di avvio)");
+            UpdateInstaller.SignalReady(args);
             return 0;
         }
 

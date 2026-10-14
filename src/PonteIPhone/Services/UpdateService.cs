@@ -77,7 +77,13 @@ public sealed class UpdateService(AppLog log)
     /// <summary>Scarica, verifica e avvia l'installazione. True se l'app deve chiudersi.</summary>
     public async Task<bool> InstallAsync(ReleaseInfo release, CancellationToken ct)
     {
-        var exePath = Environment.ProcessPath ?? throw new InvalidOperationException("Percorso dell'app sconosciuto");
+        Launch(await PrepareAsync(release, ct), release, silent: false);
+        return true;
+    }
+
+    /// <summary>Scarica la versione nuova e ne controlla la firma. Restituisce il file pronto da installare.</summary>
+    public async Task<string> PrepareAsync(ReleaseInfo release, CancellationToken ct)
+    {
         Directory.CreateDirectory(AppPaths.Updates);
         foreach (var old in Directory.EnumerateFiles(AppPaths.Updates, "PonteIPhone-*")) TryDelete(old);
 
@@ -97,14 +103,25 @@ public sealed class UpdateService(AppLog log)
             }
         }
 
-        log.Info($"Aggiornamento alla {release.Version}: avvio l'installazione");
+        log.Info($"Versione {release.Version} scaricata e verificata");
+        return downloaded;
+    }
+
+    /// <summary>
+    /// Avvia l'installazione della versione preparata. <paramref name="silent"/>: alla chiusura dell'app,
+    /// la versione nuova si mette al suo posto e fa solo una prova di avvio, senza riaprire la finestra.
+    /// </summary>
+    public void Launch(string downloaded, ReleaseInfo release, bool silent)
+    {
+        var exePath = Environment.ProcessPath ?? throw new InvalidOperationException("Percorso dell'app sconosciuto");
+        log.Info($"Aggiornamento alla {release.Version}: avvio l'installazione" + (silent ? " (alla chiusura)" : ""));
         var info = new ProcessStartInfo(downloaded) { UseShellExecute = false };
         info.ArgumentList.Add("--installa");
         info.ArgumentList.Add(exePath);
         info.ArgumentList.Add(Current.ToString());
         info.ArgumentList.Add(Environment.ProcessId.ToString());
+        if (silent) info.ArgumentList.Add("--silenzioso");
         Process.Start(info)?.Dispose();
-        return true;
     }
 
     private static async Task DownloadAsync(HttpClient http, string url, string path, CancellationToken ct)
@@ -143,7 +160,7 @@ public static class UpdateInstaller
 {
     public static string BackupPath => Path.Combine(AppPaths.Updates, "precedente.exe");
 
-    public static void Run(string target, string? fromVersion, string? oldPid, AppLog log)
+    public static void Run(string target, string? fromVersion, string? oldPid, AppLog log, bool silent = false)
     {
         log.Info($"Installazione della {UpdateService.Current} al posto della {fromVersion} in {target}");
         try
@@ -170,7 +187,11 @@ public static class UpdateInstaller
 
         var signal = $@"Local\PonteIPhone-partita-{Guid.NewGuid():N}";
         using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, signal);
-        using var p = Start(target, ["--aggiornato-da", fromVersion ?? "?", "--segnale", signal]);
+        // Silenzioso (alla chiusura): la nuova versione fa solo la prova di avvio e si richiude.
+        string[] args = silent
+            ? ["--aggiornato-da", fromVersion ?? "?", "--segnale", signal, "--solo-prova"]
+            : ["--aggiornato-da", fromVersion ?? "?", "--segnale", signal];
+        using var p = Start(target, args);
         var deadline = DateTime.UtcNow + TimeSpan.FromMinutes(2);
         while (p is not null && DateTime.UtcNow < deadline)
         {

@@ -444,9 +444,11 @@
                             <ui:Button DockPanel.Dock="Right" Content="Salva rapporto" VerticalAlignment="Center" Margin="16,0,0,0" Command="{Binding SaveReportCommand}"
                                        ToolTip="Crea sul desktop un file da mandare per l'assistenza" />
                             <StackPanel>
-                                <TextBlock Text="{Binding VersionText}" />
+                                <TextBlock>
+                                    <Run Text="{Binding VersionText, Mode=OneWay}" /><Run Text=" · " /><Run Text="{Binding UpdateStatus, Mode=OneWay}" />
+                                </TextBlock>
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
-                                           Text="Le foto finiscono in cartelle per anno e mese; quelle già copiate si saltano; gli aggiornamenti arrivano da soli." />
+                                           Text="Le foto finiscono in cartelle per anno e mese; quelle già copiate si saltano; gli aggiornamenti si installano da soli quando chiudi l'app. Se qualcosa va storto, il rapporto parte da solo verso l'assistenza (niente foto)." />
                             </StackPanel>
                         </DockPanel>
                     </Border>

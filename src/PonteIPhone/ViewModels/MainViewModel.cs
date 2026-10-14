@@ -60,6 +60,7 @@ public sealed partial class MainViewModel : ObservableObject
     private PauseController? _pause;
     private double _viewportWidth = 900;
     private ReleaseInfo? _release;
+    private readonly ProblemReporter _reporter;
 
     public AppSettings Settings { get; }
 
@@ -70,6 +71,7 @@ public sealed partial class MainViewModel : ObservableObject
         _demo = demo;
         _registry = new CopyRegistry(AppPaths.Registry);
         _updates = new UpdateService(log);
+        _reporter = new ProblemReporter(log);
         _tileSize = settings.ThumbnailSize;
         _newestFirst = settings.NewestFirst;
         _showInspector = false; // pannello dettagli tolto: l'anteprima si apre col doppio clic
@@ -272,6 +274,7 @@ public sealed partial class MainViewModel : ObservableObject
                 return;
             case OpenState.NoCameraRoll:
                 Screen = AppScreen.NoCameraRoll;
+                ReportProblem("nessuna foto visibile");
                 SetLocked(true);
                 return;
         }
@@ -290,6 +293,8 @@ public sealed partial class MainViewModel : ObservableObject
         if (!locked) _lockedSince = null;
         else _lockedSince ??= DateTime.UtcNow;
         LockedForAWhile = _lockedSince is { } t && DateTime.UtcNow - t > TimeSpan.FromSeconds(20);
+        if (_lockedSince is { } since && DateTime.UtcNow - since > TimeSpan.FromMinutes(2))
+            ReportProblem("iPhone collegato ma bloccato da più di 2 minuti");
     }
 
     private void CloseLibrary()
@@ -363,6 +368,7 @@ public sealed partial class MainViewModel : ObservableObject
                 // Aperto ma senza foto né video: si dice, invece di mostrare una griglia vuota.
                 _log.Warn($"Nessuna foto o video trovati ({_files.Count} file)");
                 Screen = AppScreen.NoCameraRoll;
+                ReportProblem("nessuna foto visibile");
                 return;
             }
             Screen = AppScreen.Library;
@@ -392,6 +398,7 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 Screen = _items.Count > 0 ? AppScreen.Library : AppScreen.Locked;
                 ShowBanner("Il telefono non risponde. Sbloccalo e premi Aggiorna (in alto a destra).", error: true);
+                ReportProblem("lettura della libreria non riuscita");
             }
         }
     }
@@ -1034,6 +1041,7 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 // Imprevisto: niente è stato tolto dal telefono (la cancellazione avviene solo alla fine, dopo le verifiche).
                 _log.Error("Trasferimento", e);
+                ReportProblem("errore imprevisto nel trasferimento");
                 ShowResult("Trasferimento interrotto", "Errore imprevisto: " + e.Message +
                     "\n\nQuello già copiato resta sul PC. Il dettaglio è nel registro.", problems: true, folder: null);
                 return;
@@ -1165,6 +1173,8 @@ public sealed partial class MainViewModel : ObservableObject
 
     private void ShowResult(string title, string text, bool problems, string? folder)
     {
+        if (problems && ReportProblem($"esito: {title}"))
+            text += "\n\nIl rapporto è stato inviato in automatico per l'assistenza.";
         ResultTitle = title;
         ResultText = text;
         ResultHasProblems = problems;
@@ -1264,26 +1274,45 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void SaveReport()
     {
-        RefreshDiagnostics();
         var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
             $"Ponte iPhone - rapporto {DateTime.Now:yyyy-MM-dd HHmm}.txt");
-        var sb = new StringBuilder(Diagnostics).AppendLine().AppendLine();
         try
         {
-            var log = _log.TodayPath;
-            if (File.Exists(log))
-            {
-                var lines = File.ReadAllLines(log);
-                sb.AppendLine("--- Registro di oggi (ultime 400 righe) ---");
-                foreach (var l in lines.TakeLast(400)) sb.AppendLine(l);
-            }
-            File.WriteAllText(path, sb.ToString());
+            File.WriteAllText(path, BuildReport());
             Shell.ShowInFolder(path);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             ShowBanner("Rapporto non salvato: " + e.Message, error: true);
         }
+    }
+
+    /// <summary>Diagnostica e ultime 400 righe del registro di oggi: lo stesso testo del rapporto salvato o inviato.</summary>
+    private string BuildReport()
+    {
+        RefreshDiagnostics();
+        var sb = new StringBuilder(Diagnostics).AppendLine().AppendLine();
+        try
+        {
+            if (File.Exists(_log.TodayPath))
+            {
+                sb.AppendLine("--- Registro di oggi (ultime 400 righe) ---");
+                foreach (var l in File.ReadAllLines(_log.TodayPath).TakeLast(400)) sb.AppendLine(l);
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            sb.AppendLine("Registro non leggibile: " + e.Message);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Invia il rapporto in automatico (non nella dimostrazione). True se è partito.</summary>
+    public bool ReportProblem(string reason)
+    {
+        if (_demo) return false;
+        _log.Warn("Problema da segnalare: " + reason);
+        return _reporter.Report(reason, BuildReport);
     }
 
     [RelayCommand]
@@ -1313,10 +1342,18 @@ public sealed partial class MainViewModel : ObservableObject
             if (automatic) await Task.Delay(TimeSpan.FromSeconds(8));
             UpdateStatus = "Controllo…";
             _release = await _updates.CheckAsync(CancellationToken.None);
-            UpdateText = _release is null ? null : $"È disponibile la versione {_release.Version}.";
-            UpdateStatus = _release is null ? $"Versione aggiornata ({UpdateService.Current})" : $"Disponibile la {_release.Version}";
+            UpdateText = null; // niente pulsanti da premere: si installa da sola alla chiusura
+            if (_release is not null)
+            {
+                _preparedUpdate = await _updates.PrepareAsync(_release, CancellationToken.None);
+                UpdateStatus = $"La {_release.Version} si installa da sola quando chiudi l'app";
+            }
+            else
+            {
+                UpdateStatus = $"Versione aggiornata ({UpdateService.Current})";
+            }
         }
-        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or IOException or System.Text.Json.JsonException)
+        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or IOException or System.Text.Json.JsonException or InvalidOperationException)
         {
             UpdateStatus = "Controllo non riuscito: " + e.Message;
             if (!automatic) _log.Warn("Controllo aggiornamenti: " + e.Message);
@@ -1384,8 +1421,16 @@ public sealed partial class MainViewModel : ObservableObject
         return true;
     }
 
+    private string? _preparedUpdate;
+
     public async Task ShutdownAsync()
     {
+        // Prima di tutto (la finestra si sta chiudendo): l'installazione aspetta che questo processo finisca.
+        if (_preparedUpdate is not null && _release is not null && !_demo)
+        {
+            try { _updates.Launch(_preparedUpdate, _release, silent: true); }
+            catch (Exception e) { _log.Error("Aggiornamento alla chiusura", e); }
+        }
         _poll.Stop();
         _thumbs?.Dispose();
         if (_browse is not null) await _browse.DisposeAsync();
