@@ -31,18 +31,21 @@ public sealed class FakeAppleDevice : IDisposable
 
     public FakeAppleDevice()
     {
+        // Un solo orario per tutti i certificati: il figlio non può scadere dopo chi lo firma.
+        var from = DateTimeOffset.UtcNow.AddDays(-1);
+        var to = from.AddYears(10);
         using var rootKey = RSA.Create(2048);
         var rootReq = new CertificateRequest("CN=Root", rootKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         rootReq.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
-        using var root = rootReq.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(10));
+        using var root = rootReq.CreateSelfSigned(from, to);
 
         using var hostKey = RSA.Create(2048);
         var hostReq = new CertificateRequest("CN=Host", hostKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-        using var host = hostReq.Create(root, DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(10), [1, 2, 3, 4]);
+        using var host = hostReq.Create(root, from, to.AddDays(-1), [1, 2, 3, 4]);
 
         using var devKey = RSA.Create(2048);
         var devReq = new CertificateRequest("CN=Device", devKey, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-        using var dev = devReq.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(10));
+        using var dev = devReq.CreateSelfSigned(from, to);
         _deviceCert = X509CertificateLoader.LoadPkcs12(dev.Export(X509ContentType.Pkcs12), null);
 
         PairRecordXml = PropertyList.ToXml(new Dictionary<string, object>
