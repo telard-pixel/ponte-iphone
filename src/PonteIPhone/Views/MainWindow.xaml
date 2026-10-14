@@ -441,7 +441,7 @@
                     <TextBlock Text="Informazioni" FontWeight="SemiBold" Margin="0,16,0,8" />
                     <Border Style="{StaticResource SettingCard}">
                         <DockPanel>
-                            <ui:Button DockPanel.Dock="Right" Content="Salva rapporto" VerticalAlignment="Center" Command="{Binding SaveReportCommand}"
+                            <ui:Button DockPanel.Dock="Right" Content="Salva rapporto" VerticalAlignment="Center" Margin="16,0,0,0" Command="{Binding SaveReportCommand}"
                                        ToolTip="Crea sul desktop un file da mandare per l'assistenza" />
                             <StackPanel>
                                 <TextBlock Text="{Binding VersionText}" />
