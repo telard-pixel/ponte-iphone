@@ -294,10 +294,13 @@ public sealed partial class AppleBackend : IDeviceBackend
 
     // ------------------------------------------------------------------ elenco
 
+    public int CloudOnlyFiles { get; private set; }
+
     public void Enumerate(Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
     {
         var buffer = new List<RemoteFile>(256);
         var bases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        CloudOnlyFiles = 0;
         Guard(() =>
         {
             Walk(Dcim, "", 0);
@@ -330,7 +333,11 @@ public sealed partial class AppleBackend : IDeviceBackend
                 }
                 // File vuoti (segnaposto di Foto di iCloud, scatti interrotti): niente da copiare,
                 // e una copia di 0 byte passerebbe tutti i controlli.
-                if (!long.TryParse(st.GetValueOrDefault("st_size"), out var size) || size <= 0) continue;
+                if (!long.TryParse(st.GetValueOrDefault("st_size"), out var size) || size <= 0)
+                {
+                    if (!name.StartsWith('.')) CloudOnlyFiles++;
+                    continue;
+                }
                 buffer.Add(ToRemote(full, name, folder, st, canDelete: true));
                 bases.Add(folder + "/" + Path.GetFileNameWithoutExtension(name));
                 Flush();

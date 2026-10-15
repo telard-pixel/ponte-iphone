@@ -56,8 +56,13 @@ public sealed class InProcessConnection : IDeviceConnection
 
     public Task<OpenResult> OpenAsync(string deviceId, CancellationToken ct) => Run(b => b.Open(deviceId), ct);
 
-    public Task EnumerateAsync(Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct) =>
-        Run(b => { b.Enumerate(batch, ct); return true; }, ct);
+    public Task<EnumerateSummary> EnumerateAsync(Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct) =>
+        Run(b =>
+        {
+            long total = 0;
+            b.Enumerate(files => { total += files.Count; batch(files); }, ct);
+            return new EnumerateSummary(total, b.CloudOnlyFiles);
+        }, ct);
 
     public Task<byte[]?> GetThumbnailAsync(string objectId, CancellationToken ct) => Run(b => b.GetThumbnail(objectId), ct);
 

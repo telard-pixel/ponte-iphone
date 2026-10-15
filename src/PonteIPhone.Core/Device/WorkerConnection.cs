@@ -342,10 +342,13 @@ public sealed class WorkerConnection : IDeviceConnection
         return result;
     }
 
-    public async Task EnumerateAsync(Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
+    public async Task<EnumerateSummary> EnumerateAsync(Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
     {
-        await CallAsync(new WireRequest { Op = WorkerProtocol.OpEnumerate }, _times.Long, ct,
+        var data = await CallAsync(new WireRequest { Op = WorkerProtocol.OpEnumerate }, _times.Long, ct,
             onBatch: e => batch(e.Deserialize<List<RemoteFile>>(WorkerProtocol.Json) ?? []));
+        return data is { ValueKind: JsonValueKind.Object } d
+            ? d.Deserialize<EnumerateSummary>(WorkerProtocol.Json) ?? new EnumerateSummary(0, 0)
+            : new EnumerateSummary(0, 0);
     }
 
     public async Task<byte[]?> GetThumbnailAsync(string objectId, CancellationToken ct)

@@ -70,6 +70,23 @@ public sealed class AppleTests : IDisposable
     }
 
     [Fact]
+    public void CountsPhotosLeftOnICloud()
+    {
+        // "Ottimizza spazio iPhone": in DCIM restano file vuoti al posto delle foto su iCloud.
+        _phone.Files["/DCIM/101APPLE/IMG_0100.HEIC"] = [];
+        _phone.Files["/DCIM/101APPLE/IMG_0101.HEIC"] = [];
+        _phone.Files["/DCIM/101APPLE/.MISC"] = [];
+        using var backend = new AppleBackend(_phone.Client());
+        var dev = Assert.Single(backend.ListDevices());
+        Assert.Equal(OpenState.Ready, backend.Open(dev.Id).State);
+
+        var files = new List<RemoteFile>();
+        backend.Enumerate(files.AddRange, CancellationToken.None);
+        Assert.Equal(4, files.Count);
+        Assert.Equal(2, backend.CloudOnlyFiles);
+    }
+
+    [Fact]
     public void OpensListsAndReadsThroughTheAppleService()
     {
         using var backend = new AppleBackend(_phone.Client());

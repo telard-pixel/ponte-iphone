@@ -19,6 +19,8 @@ public sealed class FakeBackend : IDeviceBackend
     public DeviceInfo Device { get; init; } = new("fake-1", "iPhone di prova", "Apple Inc.", "iPhone 15 Pro", "SERIALEFINTO", "26.0");
     public StorageInfo Storage { get; init; } = new("Internal Storage", 128_000_000_000, 30_000_000_000);
     public List<FakeFile> Files { get; } = [];
+    /// <summary>Foto "solo su iCloud" (file vuoti) da dichiarare dopo l'elenco.</summary>
+    public int CloudOnlyFiles { get; set; }
 
     // --- guasti simulati (contatori che scendono a ogni uso) ---
     /// <summary>Le prossime N letture restano bloccate (finché non vengono annullate o il processo chiuso).</summary>

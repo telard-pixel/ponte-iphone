@@ -61,6 +61,8 @@ public sealed class SmartBackend : IDeviceBackend
             batch(files);
         }, ct);
 
+    public int CloudOnlyFiles => _apple.CloudOnlyFiles;
+
     public byte[]? GetThumbnail(string objectId) => _apple.GetThumbnail(objectId);
 
     public DownloadResult Download(string objectId, string destination, Action<long> progress, CancellationToken ct) =>

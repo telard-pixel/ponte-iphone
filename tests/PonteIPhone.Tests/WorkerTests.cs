@@ -70,9 +70,11 @@ public sealed class WorkerTests : IDisposable
         Assert.True(opened.Ready);
         Assert.Equal(128_000_000_000, opened.Storage!.Capacity);
 
+        launcher.Backends[0].CloudOnlyFiles = 42;
         var files = new List<RemoteFile>();
-        await conn.EnumerateAsync(b => files.AddRange(b), CancellationToken.None);
+        var summary = await conn.EnumerateAsync(b => files.AddRange(b), CancellationToken.None);
         Assert.Equal(700, files.Count);
+        Assert.Equal(new EnumerateSummary(700, 42), summary);
         Assert.Equal(new DateTime(2026, 10, 1), files[0].Created);
 
         Assert.Equal(new byte[] { 1, 2, 3, 4 }, await conn.GetThumbnailAsync(files[0].ObjectId, CancellationToken.None));

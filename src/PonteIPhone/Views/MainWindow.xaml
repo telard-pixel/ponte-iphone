@@ -398,6 +398,14 @@
                         <ui:Button Appearance="Primary" Content="Apri Dispositivi Apple nel Microsoft Store" Command="{Binding InstallDriverCommand}" />
                     </StackPanel>
                 </Border>
+                <Border Background="{DynamicResource SystemFillColorCautionBackgroundBrush}" CornerRadius="6" Padding="14,10" Margin="0,4,0,12"
+                        Visibility="{Binding HasCloudOnly, Converter={StaticResource BoolToVis}}">
+                    <StackPanel>
+                        <TextBlock FontWeight="SemiBold" TextWrapping="Wrap" Text="{Binding CloudOnlyText}" />
+                        <TextBlock TextWrapping="Wrap" FontSize="12.5" Margin="0,4,0,0"
+                                   Text="Sull'iPhone: Impostazioni › [il tuo nome] › iCloud › Foto › “Scarica e mantieni originali”. Serve spazio libero sul telefono; quando ha finito di scaricare, premi Riprova." />
+                    </StackPanel>
+                </Border>
                 <TextBlock TextAlignment="Center" TextWrapping="Wrap" Style="{StaticResource Caption}" FontSize="13"
                            Text="Il telefono è aperto ma l'app non trova foto né video. Controlla che l'iPhone sia sbloccato e di aver toccato Autorizza, poi premi Riprova. Se usi “Ottimizza spazio iPhone”, le foto solo su iCloud via cavo non si vedono." />
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">

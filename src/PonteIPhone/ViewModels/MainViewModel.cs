@@ -285,6 +285,17 @@ public sealed partial class MainViewModel : ObservableObject
 
     private DateTime? _lockedSince;
 
+    /// <summary>Foto viste sul telefono ma rimaste solo su iCloud (file vuoti): non si possono copiare via cavo.</summary>
+    [ObservableProperty] private int _cloudOnlyCount;
+    public bool HasCloudOnly => CloudOnlyCount > 0;
+    public string CloudOnlyText =>
+        $"Sull'iPhone ci sono {CloudOnlyCount.ToString("N0", It)} foto e video, ma sono solo su iCloud (“Ottimizza spazio iPhone”): via cavo il telefono non li consegna, nemmeno a Windows.";
+    partial void OnCloudOnlyCountChanged(int value)
+    {
+        OnPropertyChanged(nameof(HasCloudOnly));
+        OnPropertyChanged(nameof(CloudOnlyText));
+    }
+
     /// <summary>Da quanto il telefono è collegato ma senza foto visibili (bloccato, non autorizzato, driver).</summary>
     [ObservableProperty] private bool _lockedForAWhile;
 
@@ -293,8 +304,8 @@ public sealed partial class MainViewModel : ObservableObject
         if (!locked) _lockedSince = null;
         else _lockedSince ??= DateTime.UtcNow;
         LockedForAWhile = _lockedSince is { } t && DateTime.UtcNow - t > TimeSpan.FromSeconds(20);
-        if (_lockedSince is { } since && DateTime.UtcNow - since > TimeSpan.FromMinutes(2))
-            ReportProblem("iPhone collegato ma bloccato da più di 2 minuti");
+        if (_lockedSince is { } since && DateTime.UtcNow - since > TimeSpan.FromMinutes(1))
+            ReportProblem("iPhone collegato ma bloccato da più di un minuto");
     }
 
     private void CloseLibrary()
@@ -304,6 +315,7 @@ public sealed partial class MainViewModel : ObservableObject
         _thumbs = null;
         _previews = null;
         _files.Clear();
+        CloudOnlyCount = 0;
         _items = [];
         _tiles.Clear();
         Rows.Clear();
@@ -337,6 +349,7 @@ public sealed partial class MainViewModel : ObservableObject
         Screen = AppScreen.Loading;
         LoadingText = "Leggo le foto dal telefono…";
         _files.Clear();
+        CloudOnlyCount = 0;
         _tiles.Clear();
         _copies = _registry.Load(Device!.Key);
         _thumbs?.Dispose();
@@ -348,7 +361,7 @@ public sealed partial class MainViewModel : ObservableObject
         var lastRefresh = Stopwatch.StartNew();
         try
         {
-            await _browse!.EnumerateAsync(batch =>
+            var summary = await _browse!.EnumerateAsync(batch =>
             {
                 _dispatcher.Invoke(() =>
                 {
@@ -362,18 +375,25 @@ public sealed partial class MainViewModel : ObservableObject
                 });
             }, ct);
             EnumerationSeconds = _loadClock.Elapsed.TotalSeconds;
+            CloudOnlyCount = summary.CloudOnly;
             Regroup();
             if (_items.Count == 0)
             {
                 // Aperto ma senza foto né video: si dice, invece di mostrare una griglia vuota.
-                _log.Warn($"Nessuna foto o video trovati ({_files.Count} file)");
+                _log.Warn($"Nessuna foto o video trovati ({_files.Count} file, {summary.CloudOnly} solo su iCloud)");
                 Screen = AppScreen.NoCameraRoll;
-                ReportProblem("nessuna foto visibile");
+                ReportProblem(summary.CloudOnly > 0 ? "foto solo su iCloud" : "nessuna foto visibile");
                 return;
             }
             Screen = AppScreen.Library;
-            _log.Info($"Libreria letta: {_files.Count} file, {_items.Count} elementi in {EnumerationSeconds:0.0} s");
-            ShowBanner(null);
+            _log.Info($"Libreria letta: {_files.Count} file, {_items.Count} elementi, {summary.CloudOnly} solo su iCloud, in {EnumerationSeconds:0.0} s");
+            if (summary.CloudOnly > 0)
+            {
+                ShowBanner($"Altre {summary.CloudOnly.ToString("N0", It)} foto e video sono solo su iCloud (“Ottimizza spazio iPhone”): via cavo l'iPhone non li dà. "
+                    + "Per copiarli: sull'iPhone Impostazioni › [il tuo nome] › iCloud › Foto › “Scarica e mantieni originali”, aspetta che finisca e premi Aggiorna.");
+                ReportProblem("foto solo su iCloud");
+            }
+            else ShowBanner(null);
             _ = VerifyCopiesOnDiskAsync();
         }
         catch (OperationCanceledException) { }

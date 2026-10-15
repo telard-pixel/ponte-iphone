@@ -16,6 +16,12 @@ public interface IDeviceBackend : IDisposable
     /// <summary>Tutti i file sotto DCIM, a blocchi, man mano che si leggono.</summary>
     void Enumerate(Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct);
 
+    /// <summary>
+    /// File vuoti visti dall'ultimo <see cref="Enumerate"/>: con "Ottimizza spazio iPhone" sono le foto rimaste
+    /// solo su iCloud, che il telefono via cavo non consegna. Non si elencano, ma si contano per dirlo.
+    /// </summary>
+    int CloudOnlyFiles => 0;
+
     /// <summary>Miniatura JPEG fornita dal telefono, o null se non ne ha.</summary>
     byte[]? GetThumbnail(string objectId);
 
@@ -34,8 +40,11 @@ public interface IDeviceConnection : IAsyncDisposable
 {
     Task<IReadOnlyList<DeviceInfo>> ListDevicesAsync(CancellationToken ct);
     Task<OpenResult> OpenAsync(string deviceId, CancellationToken ct);
-    Task EnumerateAsync(Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct);
+    Task<EnumerateSummary> EnumerateAsync(Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct);
     Task<byte[]?> GetThumbnailAsync(string objectId, CancellationToken ct);
     Task<DownloadResult> DownloadAsync(string objectId, string destination, Action<long>? progress, CancellationToken ct);
     Task<IReadOnlyList<DeleteResult>> DeleteAsync(IReadOnlyList<string> objectIds, CancellationToken ct);
 }
+
+/// <summary>Com'è andato un elenco: file consegnati e foto rimaste solo su iCloud (vedi <see cref="IDeviceBackend.CloudOnlyFiles"/>).</summary>
+public sealed record EnumerateSummary(long Files, int CloudOnly);
