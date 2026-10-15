@@ -72,6 +72,7 @@ public sealed partial class MainViewModel : ObservableObject
         _registry = new CopyRegistry(AppPaths.Registry);
         _updates = new UpdateService(log);
         _reporter = new ProblemReporter(log);
+        if (!demo) _ = Task.Run(_reporter.RetryPendingAsync);
         _tileSize = settings.ThumbnailSize;
         _newestFirst = settings.NewestFirst;
         _showInspector = false; // pannello dettagli tolto: l'anteprima si apre col doppio clic
@@ -1272,6 +1273,7 @@ public sealed partial class MainViewModel : ObservableObject
         Line("Driver Apple", DriverInstalled ? "trovato" : "NON trovato");
         Line("iPhone", Device is null ? "nessuno" : $"{Device.DisplayName} · {Device.Model} · iOS {Device.Firmware}");
         Line("Stato", DeviceStatus);
+        Line("Ultimo rapporto", _reporter.LastResult);
         if (Device is not null)
         {
             Line("Elementi / file", $"{_items.Count} / {_files.Count}");
@@ -1291,7 +1293,31 @@ public sealed partial class MainViewModel : ObservableObject
         Diagnostics = sb.ToString().TrimEnd();
     }
 
+    [ObservableProperty] private bool _reportSending;
+
+    /// <summary>
+    /// Il pulsante del rapporto: lo manda subito e dice se è arrivato. Se non parte resta in coda
+    /// (si riprova all'avvio) e se ne salva anche una copia sul desktop, da mandare a mano.
+    /// </summary>
     [RelayCommand]
+    private async Task SendReport()
+    {
+        if (ReportSending) return;
+        ReportSending = true;
+        try
+        {
+            if (_demo) { ShowBanner("Nella dimostrazione il rapporto non si invia."); return; }
+            var (ok, message) = await _reporter.SendNowAsync($"inviato a mano {DateTime.Now:HH:mm:ss}", BuildReport);
+            if (ok) ShowBanner("Rapporto inviato: arriva direttamente a chi ti segue con l'app.");
+            else
+            {
+                ShowBanner(message + " Ne ho salvata una copia sul desktop; verrà rimandato da solo al prossimo avvio.", error: true);
+                SaveReport();
+            }
+        }
+        finally { ReportSending = false; }
+    }
+
     private void SaveReport()
     {
         var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
