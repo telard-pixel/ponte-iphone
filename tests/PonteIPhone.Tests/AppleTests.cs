@@ -83,7 +83,7 @@ public sealed class AppleTests : IDisposable
         var files = new List<RemoteFile>();
         backend.Enumerate(files.AddRange, CancellationToken.None);
         Assert.Equal(4, files.Count);
-        Assert.Equal(2, backend.CloudOnlyFiles);
+        Assert.Equal(3, backend.CloudOnlyFiles); // i due nuovi più IMG_0003 del telefono di prova; .MISC no
     }
 
     [Fact]
