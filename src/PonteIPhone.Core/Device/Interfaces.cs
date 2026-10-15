@@ -22,6 +22,9 @@ public interface IDeviceBackend : IDisposable
     /// </summary>
     int CloudOnlyFiles => 0;
 
+    /// <summary>Com'era fatto l'ultimo elenco, per il rapporto (cartelle vuote, file vuoti…), o null.</summary>
+    string? LastEnumerationSummary => null;
+
     /// <summary>Miniatura JPEG fornita dal telefono, o null se non ne ha.</summary>
     byte[]? GetThumbnail(string objectId);
 
@@ -47,4 +50,4 @@ public interface IDeviceConnection : IAsyncDisposable
 }
 
 /// <summary>Com'è andato un elenco: file consegnati e foto rimaste solo su iCloud (vedi <see cref="IDeviceBackend.CloudOnlyFiles"/>).</summary>
-public sealed record EnumerateSummary(long Files, int CloudOnly);
+public sealed record EnumerateSummary(long Files, int CloudOnly, string? Detail = null);

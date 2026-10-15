@@ -164,7 +164,7 @@ public static class WorkerHost
                     if (batch.Count == 0)
                         send(new WireMessage { Id = req.Id, Kind = WorkerProtocol.KindProgress });
                 }, ct);
-                send(Ok(new EnumerateSummary(total, backend.CloudOnlyFiles)));
+                send(Ok(new EnumerateSummary(total, backend.CloudOnlyFiles, backend.LastEnumerationSummary)));
                 break;
             }
             case WorkerProtocol.OpThumbnail:

@@ -61,7 +61,7 @@ public sealed class InProcessConnection : IDeviceConnection
         {
             long total = 0;
             b.Enumerate(files => { total += files.Count; batch(files); }, ct);
-            return new EnumerateSummary(total, b.CloudOnlyFiles);
+            return new EnumerateSummary(total, b.CloudOnlyFiles, b.LastEnumerationSummary);
         }, ct);
 
     public Task<byte[]?> GetThumbnailAsync(string objectId, CancellationToken ct) => Run(b => b.GetThumbnail(objectId), ct);

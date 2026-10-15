@@ -7,7 +7,11 @@ namespace PonteIPhone.Core.Apple;
 public sealed record UsbmuxDevice(int DeviceId, string Udid, string ConnectionType);
 
 /// <summary>Errore del servizio Apple: non installato, non avviato, o risposta inattesa.</summary>
-public sealed class UsbmuxException(string message, Exception? inner = null) : Exception(message, inner);
+public sealed class UsbmuxException(string message, Exception? inner = null, long code = 0) : Exception(message, inner)
+{
+    /// <summary>Codice del servizio per "Connect" (3 = il telefono ha rifiutato la porta, di solito perché non è ancora pronto).</summary>
+    public long Code { get; } = code;
+}
 
 /// <summary>
 /// Il servizio Apple che fa da centralino verso gli iPhone collegati (usbmuxd; su Windows è
@@ -102,6 +106,24 @@ public sealed class UsbmuxClient
         return reply.GetData("PairRecordData");
     }
 
+    /// <summary>Identificativo di questo PC presso il servizio Apple (va nell'abbinamento), o null.</summary>
+    public string? ReadBuid()
+    {
+        using var s = Open();
+        return Exchange(s, Base("ReadBUID")).GetString("BUID");
+    }
+
+    /// <summary>Salva un abbinamento nel servizio Apple (come fa iTunes). False se il servizio lo rifiuta.</summary>
+    public bool SavePairRecord(string udid, int deviceId, byte[] record)
+    {
+        using var s = Open();
+        var msg = Base("SavePairRecord");
+        msg["PairRecordID"] = udid;
+        msg["PairRecordData"] = record;
+        msg["DeviceID"] = (long)deviceId;
+        return (Exchange(s, msg).GetLong("Number") ?? -1) == 0;
+    }
+
     /// <summary>Apre un canale verso una porta del telefono. Il chiamante possiede il flusso restituito.</summary>
     public Stream Connect(int deviceId, int port)
     {
@@ -120,7 +142,7 @@ public sealed class UsbmuxClient
                     2 => "telefono non collegato",
                     3 => "il telefono ha rifiutato il collegamento alla porta " + port,
                     _ => $"collegamento rifiutato (codice {number})",
-                });
+                }, code: number);
             return s;
         }
         catch

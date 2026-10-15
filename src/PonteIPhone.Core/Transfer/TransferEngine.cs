@@ -155,8 +155,15 @@ public sealed class TransferEngine
         IProgress<TransferStatus>? progress, PauseController? pause, CancellationToken ct)
     {
         var clock = Stopwatch.StartNew();
+        if (mode == TransferMode.Move)
+        {
+            // Con Sposta l'elemento sparisce dal telefono: sul PC deve restare tutto ciò che c'era.
+            // L'originale HEIC accanto al JPG (la conversione perde HDR e profondità) e i .AAE (le modifiche annullabili).
+            o = o with { KeepHeicOriginal = o.KeepHeicOriginal || o.ConvertHeic, IncludeSidecars = true };
+        }
         WithTiming(o);
         _report = new TransferReport { Mode = mode };
+        _verified.Clear();
         _progress = progress;
         _itemsTotal = items.Count;
         _itemsDone = 0;
@@ -195,7 +202,7 @@ public sealed class TransferEngine
 
             if (mode == TransferMode.Move && _report.Safe.Count > 0)
                 await DeleteItemsAsync(_report.Safe, item => item.FilesToCopy(includeEdited, o.IncludeSidecars)
-                    .All(f => AlreadyOnPc(f.File) is not null), ct);
+                    .All(f => VerifiedOnPc(f.File)), ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -311,6 +318,35 @@ public sealed class TransferEngine
     {
         var rec = _registry.Get(_device.Key, f.Key);
         return rec is not null && CopyRegistry.StillOnDisk(rec) ? rec : null;
+    }
+
+    /// <summary>File copiati e confrontati con l'impronta in questo trasferimento.</summary>
+    private readonly HashSet<string> _verified = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Ultimo controllo prima di togliere un file dal telefono con Sposta. Copiato adesso: già confrontato.
+    /// Copiato in passato: si rilegge la copia sul PC e se ne confronta l'impronta (la stessa dimensione non basta:
+    /// un file riscritto o rovinato può averla uguale).
+    /// </summary>
+    private bool VerifiedOnPc(RemoteFile f)
+    {
+        var rec = AlreadyOnPc(f);
+        if (rec is null) return false;
+        if (_verified.Contains(f.Key)) return true;
+        try
+        {
+            if (string.Equals(HashFile(rec.Destination), rec.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                _verified.Add(f.Key);
+                return true;
+            }
+            _log?.Warn($"Copia sul PC diversa da quella registrata: {rec.Destination}");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            _log?.Warn($"Copia sul PC non leggibile: {rec.Destination}: {e.Message}");
+        }
+        return false;
     }
 
     private string? _lastFailure;
@@ -571,7 +607,10 @@ public sealed class TransferEngine
                     TrySetTimes(target, out_.Staged.File.File);
                 }
                 if (out_.OriginalOfRemote)
+                {
                     _registry.Record(_device.Key, out_.Staged.File.File.Key, target, size, sha);
+                    _verified.Add(out_.Staged.File.File.Key);
+                }
             }
             return;
         }

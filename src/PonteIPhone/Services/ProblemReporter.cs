@@ -24,6 +24,7 @@ public sealed class ProblemReporter(AppLog log)
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(30) };
     private static string PendingFolder => Path.Combine(AppPaths.Root, "rapporti-da-inviare");
     private readonly HashSet<string> _sent = new(StringComparer.Ordinal);
+    private readonly DateTime _startedUtc = DateTime.UtcNow;
 
     /// <summary>Esito dell'ultimo invio, per la diagnostica.</summary>
     public string LastResult { get; private set; } = "nessun invio in questa sessione";
@@ -38,21 +39,34 @@ public sealed class ProblemReporter(AppLog log)
             _sent.Add(reason);
         }
         var json = BuildJson(reason, buildText);
-        _ = Task.Run(async () =>
+        // Prima su disco, poi l'invio: se l'utente chiude l'app a metà, il rapporto parte al prossimo avvio.
+        var file = SavePending(json);
+        var task = Task.Run(async () =>
         {
-            var (ok, _) = await SendAsync(reason, json);
-            if (!ok) SavePending(json);
+            var (ok, discard, _) = await SendAsync(reason, json);
+            if ((ok || discard) && file is not null) TryDelete(file);
         });
+        lock (_running) _running.Add(task);
         return true;
+    }
+
+    private readonly List<Task> _running = [];
+
+    /// <summary>Alla chiusura: aspetta gli invii in corso, per poco (quelli non finiti restano in coda su disco).</summary>
+    public async Task FlushAsync(TimeSpan max)
+    {
+        Task[] tasks;
+        lock (_running) tasks = _running.Where(t => !t.IsCompleted).ToArray();
+        if (tasks.Length > 0) await Task.WhenAny(Task.WhenAll(tasks), Task.Delay(max));
     }
 
     /// <summary>Invio chiesto dall'utente: aspetta l'esito e lo restituisce in parole semplici.</summary>
     public async Task<(bool Ok, string Message)> SendNowAsync(string reason, Func<string> buildText)
     {
         var json = BuildJson(reason, buildText);
-        var result = await SendAsync(reason, json);
-        if (!result.Ok) SavePending(json);
-        return result;
+        var (ok, discard, message) = await SendAsync(reason, json);
+        if (!ok && !discard) SavePending(json);
+        return (ok, message);
     }
 
     /// <summary>All'avvio: rimanda i rapporti rimasti indietro, dal più vecchio.</summary>
@@ -64,11 +78,12 @@ public sealed class ProblemReporter(AppLog log)
         foreach (var f in files.Order(StringComparer.Ordinal))
         {
             string json;
-            try { json = await File.ReadAllTextAsync(f); }
+            // Solo quelli delle sessioni precedenti: quelli di adesso li sta già mandando Report.
+            try { if (File.GetLastWriteTimeUtc(f) >= _startedUtc) continue; json = await File.ReadAllTextAsync(f); }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
-            var (ok, _) = await SendAsync("rimasto indietro", json);
-            if (!ok) return; // ancora niente rete o server: si riprova la prossima volta
-            TryDelete(f);
+            var (ok, discard, _) = await SendAsync("rimasto indietro", json);
+            if (ok || discard) TryDelete(f); // rifiutato per sempre dal server: non deve bloccare gli altri
+            else return; // ancora niente rete o server: si riprova la prossima volta
         }
     }
 
@@ -78,10 +93,13 @@ public sealed class ProblemReporter(AppLog log)
         try { text = buildText(); }
         catch (Exception e) { text = "Rapporto non costruito: " + e.Message; }
         if (text.Length > MaxChars) text = text[^MaxChars..];
-        return JsonSerializer.Serialize(new { app = "ponte-iphone", versione = UpdateService.Current.ToString(), motivo = reason, testo = text });
+        // Lettere accentate così come sono (non \u00e8): il rapporto resta entro il limite del ricevitore.
+        return JsonSerializer.Serialize(new { app = "ponte-iphone", versione = UpdateService.Current.ToString(), motivo = reason, testo = text },
+            new JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
     }
 
-    private async Task<(bool Ok, string Message)> SendAsync(string reason, string json)
+    /// <returns>Ok; Discard = rifiutato per sempre (4xx diverso da 408/429), inutile riprovare.</returns>
+    private async Task<(bool Ok, bool Discard, string Message)> SendAsync(string reason, string json)
     {
         try
         {
@@ -92,31 +110,49 @@ public sealed class ProblemReporter(AppLog log)
             {
                 LastResult = $"inviato alle {DateTime.Now:HH:mm} ({reason})";
                 log.Info($"Rapporto inviato ({reason})");
-                return (true, "Rapporto inviato.");
+                return (true, false, "Rapporto inviato.");
             }
-            LastResult = $"non accettato dal server: {(int)resp.StatusCode} ({reason})";
-            log.Warn($"Rapporto non accettato: {(int)resp.StatusCode}");
-            return (false, $"Il server non ha accettato il rapporto (codice {(int)resp.StatusCode}).");
+            int code = (int)resp.StatusCode;
+            LastResult = $"non accettato dal server: {code} ({reason})";
+            log.Warn($"Rapporto non accettato: {code}");
+            bool discard = code is >= 400 and < 500 and not 408 and not 429;
+            return (false, discard, code == 429
+                ? "Troppi rapporti in poco tempo: riprova tra un'ora."
+                : "Il server non ha accettato il rapporto.");
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException or IOException)
+        catch (Exception e) when (e is not OutOfMemoryException)
         {
+            // Qualunque errore (rete, antivirus, proxy): si dice e il rapporto resta in coda.
             LastResult = $"non inviato: {e.Message} ({reason})";
             log.Warn("Rapporto non inviato: " + e.Message);
-            return (false, "Rapporto non inviato: " + e.Message);
+            return (false, false, "Rapporto non inviato: il PC non riesce a raggiungere il server (rete o antivirus).");
         }
     }
 
-    private void SavePending(string json)
+    private string? SavePending(string json)
     {
         try
         {
             Directory.CreateDirectory(PendingFolder);
-            File.WriteAllText(Path.Combine(PendingFolder, $"{DateTime.Now:yyyyMMdd-HHmmss-fff}.json"), json);
+            var path = Path.Combine(PendingFolder, $"{DateTime.Now:yyyyMMdd-HHmmss-fff}-{Guid.NewGuid():N}.json");
+            File.WriteAllText(path, json);
             foreach (var old in Directory.GetFiles(PendingFolder, "*.json").Order(StringComparer.Ordinal).SkipLast(MaxPending)) TryDelete(old);
+            return path;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             log.Warn("Rapporto non conservato: " + e.Message);
+            return null;
+        }
+    }
+
+    /// <summary>Rapporti in coda, per la diagnostica.</summary>
+    public static int PendingCount
+    {
+        get
+        {
+            try { return Directory.Exists(PendingFolder) ? Directory.GetFiles(PendingFolder, "*.json").Length : 0; }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return 0; }
         }
     }
 

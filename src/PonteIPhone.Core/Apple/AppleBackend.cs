@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using ImageMagick;
 using PonteIPhone.Core.Device;
 using PonteIPhone.Core.Model;
+using PonteIPhone.Core.Storage;
 
 namespace PonteIPhone.Core.Apple;
 
@@ -28,9 +29,13 @@ public sealed partial class AppleBackend : IDeviceBackend
     private string? _openedId;
     private readonly List<string> _notes = [];
 
-    public AppleBackend(UsbmuxClient? mux = null)
+    private readonly string _pairFolder;
+
+    /// <param name="pairFolder">Dove tenere gli abbinamenti creati dall'app (nei test una cartella temporanea).</param>
+    public AppleBackend(UsbmuxClient? mux = null, string? pairFolder = null)
     {
         _mux = mux ?? new UsbmuxClient();
+        _pairFolder = pairFolder ?? Path.Combine(AppPaths.Root, "abbinamenti");
     }
 
     /// <summary>
@@ -72,13 +77,8 @@ public sealed partial class AppleBackend : IDeviceBackend
             throw new AppleUnavailableException(e.Message, e);
         }
 
-        var pair = ReadPair(udid);
+        var candidates = ReadPairs(udid);
         var info = new DeviceInfo(deviceId, "", "Apple Inc.", "iPhone", udid, "", dev.ConnectionType);
-        if (pair is null)
-        {
-            // Mai toccato "Autorizza" su questo PC (o abbinamento non leggibile): ci pensa WPD.
-            throw new AppleUnavailableException("nessun abbinamento con questo PC leggibile dal servizio Apple");
-        }
 
         string step = "collegamento al telefono";
         LockdownClient lockdown;
@@ -86,22 +86,52 @@ public sealed partial class AppleBackend : IDeviceBackend
         {
             lockdown = new LockdownClient(_mux.Connect(dev.DeviceId, LockdownClient.Port));
         }
+        catch (UsbmuxException e) when (e.Code == 3)
+        {
+            // Appena inserito il cavo il telefono è già nell'elenco ma non accetta ancora collegamenti.
+            _notes.Add("Telefono non ancora pronto: " + e.Message);
+            return new OpenResult(info, null, OpenState.NotReady, _notes.ToList());
+        }
         catch (UsbmuxException e)
         {
-            // Il servizio vede il telefono ma non riesce a parlargli: forse la via di Windows sì.
             throw new AppleUnavailableException("il servizio Apple non raggiunge il telefono: " + e.Message, e);
         }
 
         try
         {
             step = "sessione cifrata";
-            try
+            PairRecord? pair = null;
+            foreach (var candidate in candidates)
             {
-                lockdown.StartSession(pair);
+                try
+                {
+                    lockdown.StartSession(candidate);
+                    pair = candidate;
+                    break;
+                }
+                catch (LockdownException e) when (e.Error is "InvalidHostID" or "InvalidPairRecord")
+                {
+                    // Il telefono ha dimenticato questo abbinamento (ripristino, "Ripristina posizione e privacy"…).
+                    _notes.Add("Abbinamento non più valido per il telefono: " + e.Error);
+                }
             }
-            catch (LockdownException e) when (e.Error is "InvalidHostID" or "PairingProhibited" or "SslFailed" or "InvalidPairRecord")
+            if (pair is null)
             {
-                throw new AppleUnavailableException("abbinamento non accettato dal telefono: " + e.Message);
+                step = "abbinamento";
+                var (outcome, fresh) = Pair(lockdown, dev, udid);
+                if (outcome != PairOutcome.Paired || fresh is null)
+                {
+                    var state = outcome switch
+                    {
+                        PairOutcome.Denied => OpenState.TrustDenied,
+                        PairOutcome.Locked => OpenState.LockedOrNotTrusted,
+                        _ => OpenState.NotTrusted,
+                    };
+                    return new OpenResult(info, null, state, _notes.ToList());
+                }
+                pair = fresh;
+                step = "sessione cifrata";
+                lockdown.StartSession(pair);
             }
 
             step = "dati del telefono";
@@ -177,7 +207,7 @@ public sealed partial class AppleBackend : IDeviceBackend
         try
         {
             var folders = _afc.ReadDirectory(Dcim);
-            _notes.Add("Cartelle in DCIM: " + (folders.Count == 0 ? "nessuna" : string.Join(", ", folders.Take(30))));
+            _notes.Add($"Cartelle in DCIM ({folders.Count}): " + (folders.Count == 0 ? "nessuna" : string.Join(", ", folders.Take(30)) + (folders.Count > 30 ? ", …" : "")));
             state = folders.Count == 0 ? OpenState.NoCameraRoll : OpenState.Ready;
         }
         catch (AfcException e) when (e.Code == AfcException.ObjectNotFound)
@@ -205,33 +235,92 @@ public sealed partial class AppleBackend : IDeviceBackend
         catch (LockdownException) { return new Dictionary<string, object>(); }
     }
 
-    private PairRecord? ReadPair(string udid)
+    /// <summary>Abbinamenti da provare, nell'ordine: servizio Apple, file di Windows, quello creato dall'app.</summary>
+    private List<PairRecord> ReadPairs(string udid)
     {
-        try
+        var result = new List<PairRecord>();
+        void Add(PairRecord? p, string note)
         {
-            if (PairRecord.From(_mux.ReadPairRecord(udid)) is { } p)
-            {
-                _notes.Add("Abbinamento dal servizio Apple");
-                return p;
-            }
+            if (p is null || result.Any(r => r.HostId == p.HostId)) return;
+            result.Add(p);
+            _notes.Add(note);
         }
+        try { Add(PairRecord.From(_mux.ReadPairRecord(udid)), "Abbinamento dal servizio Apple"); }
         catch (Exception e) when (e is UsbmuxException or FormatException or System.Xml.XmlException)
         {
             _notes.Add("Abbinamento dal servizio Apple non disponibile: " + e.Message);
         }
-        try
-        {
-            if (PairRecord.From(UsbmuxClient.ReadPairRecordFile(udid)) is { } p)
-            {
-                _notes.Add("Abbinamento dal file di Windows");
-                return p;
-            }
-        }
+        try { Add(PairRecord.From(UsbmuxClient.ReadPairRecordFile(udid)), "Abbinamento dal file di Windows"); }
         catch (Exception e) when (e is FormatException or System.Xml.XmlException)
         {
             _notes.Add("File di abbinamento non leggibile: " + e.Message);
         }
-        return null;
+        try { Add(PairRecord.From(ReadOwnPairFile(udid)), "Abbinamento creato dall'app"); }
+        catch (Exception e) when (e is FormatException or System.Xml.XmlException)
+        {
+            _notes.Add("Abbinamento dell'app non leggibile: " + e.Message);
+        }
+        if (result.Count == 0) _notes.Add("Nessun abbinamento con questo PC: chiedo \"Autorizza\" sul telefono");
+        return result;
+    }
+
+    /// <summary>Certificati della richiesta in corso per telefono: restano gli stessi finché l'utente risponde.</summary>
+    private readonly Dictionary<string, PairingMaterial> _pairing = new(StringComparer.Ordinal);
+
+    private string OwnPairFile(string udid) => Path.Combine(_pairFolder, udid + ".plist");
+
+    private byte[]? ReadOwnPairFile(string udid)
+    {
+        try { return File.Exists(OwnPairFile(udid)) ? File.ReadAllBytes(OwnPairFile(udid)) : null; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+    }
+
+    /// <summary>
+    /// Chiede "Autorizza questo computer?" sulla stessa connessione (ancora senza sessione) e, se il telefono
+    /// accetta, salva l'abbinamento nel servizio Apple (come iTunes) e in una copia dell'app.
+    /// </summary>
+    private (PairOutcome, PairRecord?) Pair(LockdownClient lockdown, UsbmuxDevice dev, string udid)
+    {
+        if (!_pairing.TryGetValue(udid, out var material))
+        {
+            var publicKey = lockdown.Request("GetValue", new Dictionary<string, object> { ["Key"] = "DevicePublicKey" }).GetData("Value")
+                            ?? throw new LockdownException("NoPublicKey", "il telefono non ha dato la sua chiave pubblica");
+            string buid;
+            try { buid = _mux.ReadBuid() ?? Guid.NewGuid().ToString().ToUpperInvariant(); }
+            catch (UsbmuxException) { buid = Guid.NewGuid().ToString().ToUpperInvariant(); }
+            material = _pairing[udid] = PairingMaterial.Create(publicKey, buid);
+        }
+
+        var (outcome, escrow) = lockdown.Pair(material);
+        _notes.Add(outcome switch
+        {
+            PairOutcome.Paired => "Abbinamento accettato sul telefono",
+            PairOutcome.WaitingForTrust => "In attesa di \"Autorizza\" sul telefono",
+            PairOutcome.Denied => "Sul telefono è stato toccato \"Non autorizzare\"",
+            _ => "Telefono bloccato: \"Autorizza\" compare solo da sbloccato",
+        });
+        if (outcome != PairOutcome.Paired) return (outcome, null);
+        _pairing.Remove(udid);
+
+        string? mac = null;
+        try { mac = lockdown.Request("GetValue", new Dictionary<string, object> { ["Key"] = "WiFiAddress" }).GetString("Value"); }
+        catch (LockdownException) { }
+        var xml = material.RecordXml(escrow, mac);
+        try
+        {
+            _notes.Add(_mux.SavePairRecord(udid, dev.DeviceId, xml) ? "Abbinamento salvato nel servizio Apple" : "Il servizio Apple non ha salvato l'abbinamento");
+        }
+        catch (UsbmuxException e) { _notes.Add("Abbinamento non salvato nel servizio Apple: " + e.Message); }
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(OwnPairFile(udid))!);
+            File.WriteAllBytes(OwnPairFile(udid), xml);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            _notes.Add("Copia dell'abbinamento non salvata: " + e.Message);
+        }
+        return (PairOutcome.Paired, PairRecord.From(xml));
     }
 
     private AfcClient ConnectAfc(int deviceId, (int Port, bool Ssl) service, PairRecord pair)
@@ -296,19 +385,46 @@ public sealed partial class AppleBackend : IDeviceBackend
 
     public int CloudOnlyFiles { get; private set; }
 
+    /// <summary>Com'era fatto l'ultimo elenco (per il rapporto): cartelle, cartelle vuote, file vuoti, miniature senza file.</summary>
+    public string? LastEnumerationSummary { get; private set; }
+
     public void Enumerate(Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
     {
         var buffer = new List<RemoteFile>(256);
         var bases = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        CloudOnlyFiles = 0;
+        // Cartella/nome di tutto ciò che c'è in DCIM, anche i file vuoti: serve a contare le foto che mancano.
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var topFolders = new List<string>();
+        int emptyFiles = 0, emptyFolders = 0, missing = 0;
         Guard(() =>
         {
+            buffer.Clear(); bases.Clear(); seen.Clear(); topFolders.Clear();
+            emptyFiles = emptyFolders = missing = 0;
             Walk(Dcim, "", 0);
             AddEdited();
+            missing = CountMissingOriginals();
             return 0;
         });
         if (buffer.Count > 0) batch(buffer.ToList());
+        CloudOnlyFiles = emptyFiles + missing;
+        LastEnumerationSummary = $"{topFolders.Count} cartelle ({emptyFolders} vuote), {emptyFiles} file vuoti, {missing} foto con miniatura ma senza file";
         return;
+
+        // Con "Ottimizza spazio iPhone" l'originale di una foto su iCloud spesso non è proprio in DCIM,
+        // ma la libreria ne tiene la miniatura in PhotoData/Thumbnails/V2/DCIM/<cartella>/<nome>.
+        int CountMissingOriginals()
+        {
+            int n = 0;
+            foreach (var folder in topFolders)
+            {
+                ct.ThrowIfCancellationRequested();
+                List<string> thumbs;
+                try { thumbs = Afc.ReadDirectory("/PhotoData/Thumbnails/V2/DCIM/" + folder); }
+                catch (AfcException) { continue; }
+                n += thumbs.Count(t => !t.StartsWith('.') && !seen.Contains(folder + "/" + t));
+            }
+            return n;
+        }
 
         void Flush()
         {
@@ -328,14 +444,25 @@ public sealed partial class AppleBackend : IDeviceBackend
                 catch (AfcException e) when (e.Code == AfcException.ObjectNotFound) { continue; }
                 if (st.GetValueOrDefault("st_ifmt") == "S_IFDIR")
                 {
-                    if (depth < 3) Walk(full, folder.Length == 0 ? name : folder + "/" + name, depth + 1);
+                    if (depth == 0)
+                    {
+                        topFolders.Add(name);
+                        int before = seen.Count;
+                        Walk(full, name, 1);
+                        if (seen.Count == before) emptyFolders++;
+                        // Un segno di vita per cartella: con tante cartelle vuote l'elenco non tace per un minuto.
+                        batch(buffer.ToList());
+                        buffer.Clear();
+                    }
+                    else if (depth < 3) Walk(full, folder + "/" + name, depth + 1);
                     continue;
                 }
                 // File vuoti (segnaposto di Foto di iCloud, scatti interrotti): niente da copiare,
                 // e una copia di 0 byte passerebbe tutti i controlli.
+                if (!name.StartsWith('.')) seen.Add(folder + "/" + name);
                 if (!long.TryParse(st.GetValueOrDefault("st_size"), out var size) || size <= 0)
                 {
-                    if (!name.StartsWith('.')) CloudOnlyFiles++;
+                    if (!name.StartsWith('.')) emptyFiles++;
                     continue;
                 }
                 buffer.Add(ToRemote(full, name, folder, st, canDelete: true));

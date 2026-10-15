@@ -112,6 +112,27 @@ public sealed class LockdownClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// Chiede "Autorizza questo computer?" (va fatto senza sessione). Restituisce l'esito e, se abbinato,
+    /// la escrow bag che il telefono consegna per aprire i servizi anche da bloccato.
+    /// </summary>
+    public (PairOutcome Outcome, byte[]? EscrowBag) Pair(PairingMaterial material)
+    {
+        try
+        {
+            var reply = Request("Pair", new Dictionary<string, object>
+            {
+                ["PairRecord"] = material.ForDevice(),
+                ["ProtocolVersion"] = "2",
+                ["PairingOptions"] = new Dictionary<string, object> { ["ExtendedPairingErrors"] = true },
+            });
+            return (PairOutcome.Paired, reply.GetData("EscrowBag"));
+        }
+        catch (LockdownException e) when (e.Error == "PairingDialogResponsePending") { return (PairOutcome.WaitingForTrust, null); }
+        catch (LockdownException e) when (e.Error == "UserDeniedPairing") { return (PairOutcome.Denied, null); }
+        catch (LockdownException e) when (e.Error == "PasswordProtected") { return (PairOutcome.Locked, null); }
+    }
+
     /// <summary>Apre un servizio del telefono: restituisce la porta e se va cifrato anche quello.</summary>
     public (int Port, bool Ssl) StartService(string service, byte[]? escrowBag = null)
     {

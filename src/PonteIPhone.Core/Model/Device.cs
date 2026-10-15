@@ -52,6 +52,12 @@ public enum OpenState
     LockedOrNotTrusted,
     /// <summary>Memoria visibile ma senza DCIM: telefono senza foto o con tutto solo su iCloud.</summary>
     NoCameraRoll,
+    /// <summary>"Autorizza questo computer?" è sul telefono e aspetta una risposta.</summary>
+    NotTrusted,
+    /// <summary>Sul telefono è stato toccato "Non autorizzare".</summary>
+    TrustDenied,
+    /// <summary>Appena collegato, il telefono non accetta ancora collegamenti: si riprova tra poco, senza allarmi.</summary>
+    NotReady,
 }
 
 /// <summary>Un file del Rullino come lo dichiara il telefono.</summary>

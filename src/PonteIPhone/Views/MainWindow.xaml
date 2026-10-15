@@ -247,7 +247,10 @@
                     <DockPanel>
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
                             <ui:Button ToolTip="Rileggi il telefono (F5)" Command="{Binding ReloadCommand}">
-                                <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}" />
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE72C;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" />
+                                    <TextBlock Text="Rileggi" Margin="6,0,0,0" VerticalAlignment="Center" />
+                                </StackPanel>
                             </ui:Button>
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
@@ -370,10 +373,10 @@
             <StackPanel Grid.Column="1" MaxWidth="460" HorizontalAlignment="Center" VerticalAlignment="Center"
                         Visibility="{Binding ShowLocked, Converter={StaticResource BoolToVis}}">
                 <TextBlock Style="{StaticResource Icon}" Text="&#xE72E;" FontSize="44" HorizontalAlignment="Center" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
-                <TextBlock Text="Sblocca l'iPhone" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,14,0,8" />
-                <TextBlock TextAlignment="Center" TextWrapping="Wrap" Style="{StaticResource Caption}" FontSize="13"
-                           Text="Il telefono è collegato ma non mostra le foto. Sbloccalo e, se compare “Autorizzare questo computer?”, tocca Autorizza. L'app riprova da sola ogni pochi secondi." />
+                <TextBlock Text="{Binding WaitTitle}" FontSize="24" FontWeight="SemiBold" HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" Margin="0,14,0,8" />
+                <TextBlock TextAlignment="Center" TextWrapping="Wrap" Style="{StaticResource Caption}" FontSize="13" Text="{Binding WaitText}" />
                 <ui:ProgressRing IsIndeterminate="True" Width="28" Height="28" Margin="0,22,0,0" HorizontalAlignment="Center" />
+                <ui:Button Content="Riprova adesso" HorizontalAlignment="Center" Margin="0,16,0,0" Command="{Binding ReloadCommand}" />
                 <Border Background="{DynamicResource SystemFillColorCautionBackgroundBrush}" CornerRadius="6" Padding="14,10" Margin="0,22,0,0"
                         Visibility="{Binding LockedForAWhile, Converter={StaticResource BoolToVis}}">
                     <StackPanel>

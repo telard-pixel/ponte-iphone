@@ -220,7 +220,42 @@ public sealed class TransferTests : IDisposable
         Assert.Empty(_fake.Files); // anche il .AAE: sul telefono l'elemento è uno solo
         Assert.True(File.Exists(Path.Combine(Month(Oct), "IMG_0001.HEIC")));
         Assert.True(File.Exists(Path.Combine(Month(Oct), "IMG_0001.MOV")));
+        Assert.True(File.Exists(Path.Combine(Month(Oct), "IMG_0001.AAE"))); // con Sposta anche le modifiche annullabili
         Assert.All(_registry.Load(_fake.Device.Key).Values, r => Assert.NotNull(r.DeletedFromPhoneAt));
+    }
+
+    [Fact]
+    public async Task MoveDoesNotDeleteWhenTheOldCopyChangedWithSameSize()
+    {
+        // Copiata ieri; poi il file sul PC è stato riscritto (stessa dimensione, contenuto diverso).
+        _fake.Add("202610_a", "IMG_0001.HEIC", 80_000, Oct);
+        var items = await LoadAsync();
+        await Engine().RunAsync(items, TransferMode.Copy, Options(), null, null, CancellationToken.None);
+        var onPc = Path.Combine(Month(Oct), "IMG_0001.HEIC");
+        var bytes = File.ReadAllBytes(onPc);
+        bytes[100] ^= 0xFF;
+        File.WriteAllBytes(onPc, bytes);
+
+        var report = await Engine().RunAsync(items, TransferMode.Move, Options(), null, null, CancellationToken.None);
+
+        Assert.Equal(0, report.Deleted);
+        Assert.Single(_fake.Files); // la foto resta sul telefono
+        Assert.Empty(_fake.Deleted);
+    }
+
+    [Fact]
+    public async Task MoveWithConversionAlwaysKeepsTheOriginal()
+    {
+        _fake.Add("202610_a", "IMG_0001.HEIC", 80_000, Oct);
+        var items = await LoadAsync();
+        var engine = new TransferEngine(_conn, _fake.Device, _registry, converter: new CopyingConverter());
+
+        var report = await engine.RunAsync(items, TransferMode.Move, Options() with { ConvertHeic = true, KeepHeicOriginal = false },
+            null, null, CancellationToken.None);
+
+        Assert.Equal(1, report.Deleted);
+        Assert.True(File.Exists(Path.Combine(Month(Oct), "IMG_0001.JPG")));
+        Assert.True(File.Exists(Path.Combine(Month(Oct), "IMG_0001.HEIC"))); // l'HEIC non si perde
     }
 
     [Fact]
@@ -342,4 +377,10 @@ internal sealed class SyncProgress<T>(Action<T> action) : IProgress<T>
 {
     private readonly object _lock = new();
     public void Report(T value) { lock (_lock) action(value); }
+}
+
+/// <summary>Convertitore finto: il "JPG" è una copia dell'originale (basta per provare cosa resta sul PC).</summary>
+internal sealed class CopyingConverter : IImageConverter
+{
+    public void HeicToJpeg(string source, string destination, int quality) => File.Copy(source, destination, overwrite: true);
 }

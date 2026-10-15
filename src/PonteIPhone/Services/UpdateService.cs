@@ -46,7 +46,8 @@ public sealed class UpdateService(AppLog log)
         using var req = new HttpRequestMessage(HttpMethod.Get, $"https://api.github.com/repos/{Repo}/releases/latest");
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         using var resp = await http.SendAsync(req, ct);
-        if (!resp.IsSuccessStatusCode) return null;
+        // Un errore di GitHub (limite di richieste, guasto) non è "nessuna novità": deve risultare un controllo non riuscito.
+        if (!resp.IsSuccessStatusCode) throw new HttpRequestException($"GitHub ha risposto {(int)resp.StatusCode}");
         var json = await resp.Content.ReadAsStringAsync(ct);
         var latest = Parse(json);
         return latest is not null && latest.Version > Current ? latest : null;
@@ -181,7 +182,8 @@ public static class UpdateInstaller
         catch (Exception e)
         {
             log.Error("Installazione dell'aggiornamento", e);
-            Start(target, []);
+            // Alla chiusura l'utente non si aspetta di vedere riaprirsi l'app: si riprova alla prossima chiusura.
+            if (!silent) Start(target, []);
             return;
         }
 

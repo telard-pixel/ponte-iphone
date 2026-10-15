@@ -41,6 +41,8 @@ public sealed class SmartBackend : IDeviceBackend
 
     public OpenResult Open(string deviceId)
     {
+        // Telefono riaperto (o ricollegato): l'elenco WPD di prima può avere ID non più validi.
+        ForgetWpd();
         try
         {
             return _apple.Open(deviceId);
@@ -62,6 +64,7 @@ public sealed class SmartBackend : IDeviceBackend
         }, ct);
 
     public int CloudOnlyFiles => _apple.CloudOnlyFiles;
+    public string? LastEnumerationSummary => _apple.LastEnumerationSummary;
 
     public byte[]? GetThumbnail(string objectId) => _apple.GetThumbnail(objectId);
 
@@ -85,9 +88,31 @@ public sealed class SmartBackend : IDeviceBackend
                 continue;
             }
             var r = Wpd.Delete([wpdId]).FirstOrDefault() ?? new DeleteResult(wpdId, false, DeviceErrors.GenFailure);
+            if (!r.Ok && DeviceErrors.IsNotFound(r.HResult) && _apple.Describe(id) is not null)
+            {
+                // WPD dice "non trovato" ma il file è ancora sul telefono: ID vecchio, non una cancellazione riuscita.
+                r = r with { HResult = DeviceErrors.NoWpdMatch };
+                ForgetWpd();
+            }
+            else if (r.Ok || DeviceErrors.IsNotFound(r.HResult))
+            {
+                RemoveFromMap(map, wpdId);
+            }
             results.Add(r with { ObjectId = id });
         }
         return results;
+    }
+
+    private void ForgetWpd()
+    {
+        _wpdFiles = null;
+        _wpdFilesFor = null;
+        _wpdProblem = 0;
+    }
+
+    private static void RemoveFromMap(Dictionary<string, List<RemoteFile>> map, string wpdId)
+    {
+        foreach (var list in map.Values) list.RemoveAll(f => f.ObjectId == wpdId);
     }
 
     /// <summary>Elenco WPD del telefono aperto, o null (con il motivo in <see cref="_wpdProblem"/>).</summary>
@@ -151,21 +176,22 @@ public sealed class SmartBackend : IDeviceBackend
     }
 
     /// <summary>
-    /// Lo stesso file in WPD: stesso nome e stessa dimensione; altrimenti stesso nome se è uno solo.
+    /// Lo stesso file in WPD: sempre stesso nome E stessa dimensione (un elenco WPD incompleto non deve far
+    /// cancellare l'omonimo di un'altra cartella). Se ce n'è più d'uno decidono la cartella, poi la data.
     /// Nel dubbio nessuno: meglio non cancellare che cancellare la foto sbagliata.
     /// </summary>
     internal static string? Match(Dictionary<string, List<RemoteFile>> map, RemoteFile f)
     {
         if (!map.TryGetValue(f.Name, out var byName) || byName.Count == 0) return null;
-        var sameSize = byName.Where(w => w.Size == f.Size).ToList();
+        var sameSize = byName.Where(w => w.Size == f.Size && f.Size > 0).ToList();
         if (sameSize.Count == 1) return sameSize[0].ObjectId;
-        if (sameSize.Count > 1)
-        {
-            // Stesso nome e dimensione in due cartelle (contatore ripartito da IMG_0001): decide la data.
-            var sameDate = sameSize.Where(w => w.Created is { } c && f.Created is { } d && Math.Abs((c - d).TotalMinutes) < 2).ToList();
-            return sameDate.Count == 1 ? sameDate[0].ObjectId : null;
-        }
-        return byName.Count == 1 ? byName[0].ObjectId : null;
+        if (sameSize.Count == 0) return null;
+        // Stesso nome e dimensione in più cartelle (contatore ripartito da IMG_0001): la cartella, se WPD la dà uguale…
+        var sameFolder = sameSize.Where(w => w.Folder.Length > 0 && string.Equals(w.Folder, f.Folder, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (sameFolder.Count == 1) return sameFolder[0].ObjectId;
+        // …altrimenti la data.
+        var sameDate = sameSize.Where(w => w.Created is { } c && f.Created is { } d && Math.Abs((c - d).TotalMinutes) < 2).ToList();
+        return sameDate.Count == 1 ? sameDate[0].ObjectId : null;
     }
 
     public void Dispose()

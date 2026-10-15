@@ -158,10 +158,44 @@ public sealed partial class MainViewModel : ObservableObject
         string.Join(" · ", new[] { Device.Model, string.IsNullOrWhiteSpace(Device.Firmware) ? "" : "iOS " + Device.Firmware }
             .Where(s => !string.IsNullOrWhiteSpace(s)));
 
+    /// <summary>Perché il telefono collegato non mostra ancora le foto: decide titolo e testo della schermata.</summary>
+    public enum WaitReason { Locked, NotTrusted, Denied, Connecting }
+
+    [ObservableProperty] private WaitReason _waitReason = WaitReason.Connecting;
+
+    partial void OnWaitReasonChanged(WaitReason value)
+    {
+        OnPropertyChanged(nameof(WaitTitle));
+        OnPropertyChanged(nameof(WaitText));
+        OnPropertyChanged(nameof(DeviceStatus));
+    }
+
+    public string WaitTitle => WaitReason switch
+    {
+        WaitReason.NotTrusted => "Tocca “Autorizza” sull'iPhone",
+        WaitReason.Denied => "L'iPhone non ha autorizzato questo PC",
+        WaitReason.Connecting => "Collegamento all'iPhone…",
+        _ => "Sblocca l'iPhone",
+    };
+
+    public string WaitText => WaitReason switch
+    {
+        WaitReason.NotTrusted => "Sul telefono è comparso “Autorizzare questo computer?”: tocca Autorizza e inserisci il codice. Se non lo vedi, sblocca il telefono.",
+        WaitReason.Denied => "Sul telefono è stato toccato “Non autorizzare”. Scollega il cavo e ricollegalo con l'iPhone sbloccato: la domanda ricompare, e questa volta tocca Autorizza.",
+        WaitReason.Connecting => "Il telefono si è appena collegato: ancora un attimo.",
+        _ => "Il telefono è collegato ma bloccato. Sbloccalo: l'app riprova da sola ogni pochi secondi.",
+    };
+
     public string DeviceStatus => Screen switch
     {
         AppScreen.NoDevice => "Non collegato",
-        AppScreen.Locked => "Bloccato: sbloccalo",
+        AppScreen.Locked => WaitReason switch
+        {
+            WaitReason.NotTrusted => "Da autorizzare",
+            WaitReason.Denied => "Non autorizzato",
+            WaitReason.Connecting => "Collegamento…",
+            _ => "Bloccato: sbloccalo",
+        },
         AppScreen.NoCameraRoll => "Collegato, senza foto",
         AppScreen.Loading => "Lettura in corso…",
         _ => !IsTransferring ? "Collegato" : _transferMode == TransferMode.Delete ? "Eliminazione in corso" : "Trasferimento in corso",
@@ -197,10 +231,19 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>Notifica di Windows: un dispositivo si è collegato o scollegato.</summary>
     public Task OnDevicesChangedAsync() => RefreshDevicesAsync();
 
+    private int _pollTicks;
+    private DateTime _nextOpen = DateTime.MinValue;
+
     private async Task PollAsync()
     {
-        // Senza telefono (o bloccato) si ricontrolla ogni 3 secondi: le notifiche di Windows a volte non arrivano.
-        if (IsTransferring || Screen is AppScreen.Library or AppScreen.Loading) return;
+        // Le notifiche di Windows a volte non arrivano: senza telefono si ricontrolla ogni 3 secondi,
+        // con la libreria aperta ogni 9 (solo l'elenco, per accorgersi che è stato scollegato).
+        _pollTicks++;
+        if (!_demo && _preparedUpdate is null && DateTime.UtcNow > _nextUpdateCheck) _ = CheckUpdatesAsync(automatic: true);
+        if (IsTransferring || Screen == AppScreen.Loading) return;
+        if (Screen == AppScreen.Library && _pollTicks % 3 != 0) return;
+        if (Screen == AppScreen.NoCameraRoll && _noPhotosSince is { } since && DateTime.UtcNow - since > TimeSpan.FromSeconds(30))
+            ReportProblem(CloudOnlyCount > 0 ? "foto solo su iCloud" : "nessuna foto visibile");
         await RefreshDevicesAsync();
     }
 
@@ -234,10 +277,17 @@ public sealed partial class MainViewModel : ObservableObject
             if (list.Count == 0)
             {
                 SetLocked(false);
-                if (Screen != AppScreen.NoDevice) { CloseLibrary(); Screen = AppScreen.NoDevice; }
+                _noPhotosSince = null;
+                if (Screen != AppScreen.NoDevice) { CloseLibrary(); Screen = AppScreen.NoDevice; ShowBanner(null); }
                 DriverInstalled = _demo || AppleDriver.IsInstalled();
                 return;
             }
+
+            // Stesso telefono ancora lì: "nessuna foto" non si riapre da solo (lo fa Riprova), e per
+            // "bloccato" o "Autorizza" si rispetta l'attesa: niente sessioni nuove ogni 3 secondi per niente.
+            bool same = Device is { } d0 && list.Any(d => d.Id == d0.Id);
+            if (same && Screen == AppScreen.NoCameraRoll) return;
+            if (same && Screen == AppScreen.Locked && DateTime.UtcNow < _nextOpen) return;
             await OpenDeviceAsync(list[0]);
         }
         finally
@@ -255,10 +305,16 @@ public sealed partial class MainViewModel : ObservableObject
         }
         catch (DeviceException e)
         {
-            _log.Warn("Apertura dell'iPhone: " + e.Message);
+            LogOnce("Apertura dell'iPhone: " + e.Message);
+            if (e.Kind == DeviceErrorKind.Gone)
+            {
+                // Sparito tra l'elenco e l'apertura: non è "bloccato".
+                CloseLibrary();
+                Screen = AppScreen.NoDevice;
+                return;
+            }
             Device = dev;
-            Screen = AppScreen.Locked;
-            SetLocked(true);
+            ShowWait(WaitReason.Connecting, retryIn: TimeSpan.FromSeconds(3));
             return;
         }
 
@@ -266,17 +322,24 @@ public sealed partial class MainViewModel : ObservableObject
         Storage = result.Storage;
         _openNotes = result.Notes ?? [];
         DriverInstalled = _demo || AppleDriver.IsInstalled();
-        foreach (var n in _openNotes) _log.Info("iPhone: " + n);
+        // Le note si scrivono solo quando cambiano: con il telefono bloccato riempivano il registro ogni 3 secondi.
+        LogOnce(string.Join(" | ", _openNotes));
         switch (result.State)
         {
             case OpenState.LockedOrNotTrusted:
-                Screen = AppScreen.Locked;
-                SetLocked(true);
+                ShowWait(WaitReason.Locked, retryIn: TimeSpan.FromSeconds(3));
+                return;
+            case OpenState.NotTrusted:
+                ShowWait(WaitReason.NotTrusted, retryIn: TimeSpan.FromSeconds(2));
+                return;
+            case OpenState.TrustDenied:
+                ShowWait(WaitReason.Denied, retryIn: TimeSpan.FromSeconds(10));
+                return;
+            case OpenState.NotReady:
+                ShowWait(WaitReason.Connecting, retryIn: TimeSpan.FromSeconds(1.5));
                 return;
             case OpenState.NoCameraRoll:
-                Screen = AppScreen.NoCameraRoll;
-                ReportProblem("nessuna foto visibile");
-                SetLocked(true);
+                ShowNoPhotos();
                 return;
         }
         SetLocked(false);
@@ -285,6 +348,33 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     private DateTime? _lockedSince;
+    private string? _lastEnumeration;
+    /// <summary>Da quando si vede "nessuna foto": il rapporto parte solo se dura (la prima lettura a volte esce vuota).</summary>
+    private DateTime? _noPhotosSince;
+    private string? _lastOpenLog;
+
+    private void LogOnce(string text)
+    {
+        if (text.Length == 0 || text == _lastOpenLog) return;
+        _lastOpenLog = text;
+        _log.Info("iPhone: " + text);
+    }
+
+    private void ShowWait(WaitReason reason, TimeSpan retryIn)
+    {
+        WaitReason = reason;
+        Screen = AppScreen.Locked;
+        _nextOpen = DateTime.UtcNow + retryIn;
+        // "Collegamento…" e "Autorizza" non sono un blocco: l'avviso "è già sbloccato?" e il rapporto solo per il resto.
+        SetLocked(reason is WaitReason.Locked or WaitReason.Denied);
+    }
+
+    private void ShowNoPhotos()
+    {
+        Screen = AppScreen.NoCameraRoll;
+        SetLocked(false);
+        _noPhotosSince ??= DateTime.UtcNow;
+    }
 
     /// <summary>Foto viste sul telefono ma rimaste solo su iCloud (file vuoti): non si possono copiare via cavo.</summary>
     [ObservableProperty] private int _cloudOnlyCount;
@@ -306,7 +396,7 @@ public sealed partial class MainViewModel : ObservableObject
         else _lockedSince ??= DateTime.UtcNow;
         LockedForAWhile = _lockedSince is { } t && DateTime.UtcNow - t > TimeSpan.FromSeconds(20);
         if (_lockedSince is { } since && DateTime.UtcNow - since > TimeSpan.FromMinutes(1))
-            ReportProblem("iPhone collegato ma bloccato da più di un minuto");
+            ReportProblem(WaitReason == WaitReason.Denied ? "autorizzazione negata sull'iPhone" : "iPhone collegato ma bloccato da più di un minuto");
     }
 
     private void CloseLibrary()
@@ -333,7 +423,10 @@ public sealed partial class MainViewModel : ObservableObject
         if (IsTransferring || Device is null) return;
         var dev = Device;
         CloseLibrary();
-        Screen = AppScreen.NoDevice;
+        Screen = AppScreen.Loading;
+        LoadingText = "Rileggo il telefono…";
+        _noPhotosSince = null;
+        ShowBanner(null);
         await _deviceLock.WaitAsync();
         try { await OpenDeviceAsync(dev); }
         finally { _deviceLock.Release(); }
@@ -378,20 +471,33 @@ public sealed partial class MainViewModel : ObservableObject
             EnumerationSeconds = _loadClock.Elapsed.TotalSeconds;
             CloudOnlyCount = summary.CloudOnly;
             Regroup();
+            _lastEnumeration = summary.Detail;
+            if (_items.Count == 0 && summary.CloudOnly == 0 && attempt == 1 && !ct.IsCancellationRequested)
+            {
+                // Appena collegato, la prima lettura a volte esce vuota e pochi secondi dopo arrivano migliaia di foto:
+                // si rilegge una volta prima di dire "nessuna foto".
+                _log.Info("Elenco vuoto alla prima lettura: rileggo tra poco");
+                LoadingText = "Leggo le foto dal telefono…";
+                try { await Task.Delay(TimeSpan.FromSeconds(2.5), ct); }
+                catch (OperationCanceledException) { return; }
+                await LoadLibraryAsync(attempt + 1);
+                return;
+            }
             if (_items.Count == 0)
             {
                 // Aperto ma senza foto né video: si dice, invece di mostrare una griglia vuota.
-                _log.Warn($"Nessuna foto o video trovati ({_files.Count} file, {summary.CloudOnly} solo su iCloud)");
-                Screen = AppScreen.NoCameraRoll;
-                ReportProblem(summary.CloudOnly > 0 ? "foto solo su iCloud" : "nessuna foto visibile");
+                _log.Warn($"Nessuna foto o video trovati ({_files.Count} file; {summary.Detail})");
+                ShowNoPhotos();
+                if (summary.CloudOnly > 0) ReportProblem("foto solo su iCloud");
                 return;
             }
             Screen = AppScreen.Library;
-            _log.Info($"Libreria letta: {_files.Count} file, {_items.Count} elementi, {summary.CloudOnly} solo su iCloud, in {EnumerationSeconds:0.0} s");
+            _noPhotosSince = null;
+            _log.Info($"Libreria letta: {_files.Count} file, {_items.Count} elementi in {EnumerationSeconds:0.0} s; {summary.Detail}");
             if (summary.CloudOnly > 0)
             {
                 ShowBanner($"Altre {summary.CloudOnly.ToString("N0", It)} foto e video sono solo su iCloud (“Ottimizza spazio iPhone”): via cavo l'iPhone non li dà. "
-                    + "Per copiarli: sull'iPhone Impostazioni › [il tuo nome] › iCloud › Foto › “Scarica e mantieni originali”, aspetta che finisca e premi Aggiorna.");
+                    + "Per copiarli: sull'iPhone Impostazioni › [il tuo nome] › iCloud › Foto › “Scarica e mantieni originali”, aspetta che finisca e premi Rileggi (in alto a destra).");
                 ReportProblem("foto solo su iCloud");
             }
             else ShowBanner(null);
@@ -406,6 +512,7 @@ public sealed partial class MainViewModel : ObservableObject
             {
                 CloseLibrary();
                 Screen = AppScreen.NoDevice;
+                ShowBanner(null);
             }
             else if (attempt < 3 && !ct.IsCancellationRequested)
             {
@@ -417,8 +524,12 @@ public sealed partial class MainViewModel : ObservableObject
             }
             else
             {
-                Screen = _items.Count > 0 ? AppScreen.Library : AppScreen.Locked;
-                ShowBanner("Il telefono non risponde. Sbloccalo e premi Aggiorna (in alto a destra).", error: true);
+                if (_items.Count > 0)
+                {
+                    Screen = AppScreen.Library;
+                    ShowBanner("Il telefono non risponde. Sbloccalo e premi Rileggi (in alto a destra).", error: true);
+                }
+                else ShowWait(WaitReason.Locked, retryIn: TimeSpan.FromSeconds(3));
                 ReportProblem("lettura della libreria non riuscita");
             }
         }
@@ -446,6 +557,11 @@ public sealed partial class MainViewModel : ObservableObject
 
     private bool IsOnPc(MediaItem item) =>
         item.FilesToCopy(Settings.IncludeEdited, Settings.IncludeSidecars).All(f => _copies.ContainsKey(f.File.Key));
+
+    /// <summary>Foto, video e versione modificata davvero presenti sul PC in questo momento (per l'avviso di Elimina).</summary>
+    private bool FullyOnPcNow(MediaItem item) =>
+        item.FilesToCopy(includeEdited: true, includeSidecars: false)
+            .All(f => _copies.TryGetValue(f.File.Key, out var r) && CopyRegistry.StillOnDisk(r));
 
     // ================================================================== griglia
 
@@ -850,7 +966,8 @@ public sealed partial class MainViewModel : ObservableObject
         }
         catch (Exception e) when (e is DeviceException or IOException)
         {
-            PreviewMessage = "Video non disponibile: " + e.Message;
+            _log.Warn("Video per l'anteprima: " + e.Message);
+            PreviewMessage = "Il telefono non ha consegnato il video: riprova tra poco.";
         }
         finally
         {
@@ -972,6 +1089,9 @@ public sealed partial class MainViewModel : ObservableObject
     {
         var sel = Selected;
         if (sel.Count == 0) return;
+        // Controllo sul disco adesso, non il bollino: il file sul PC può essere stato cancellato o spostato
+        // dopo l'apertura. E contano tutti i file che Elimina toglie, versione modificata compresa.
+        foreach (var t in sel) t.IsOnPc = FullyOnPcNow(t.Item);
         int notOnPc = sel.Count(t => !t.IsOnPc);
         ConfirmDeleteTitle = sel.Count == 1 ? "Eliminare 1 elemento dall'iPhone?" : $"Eliminare {sel.Count.ToString("N0", It)} elementi dall'iPhone?";
         ConfirmDeleteText = $"{sel.Sum(t => t.Item.Files.Count).ToString("N0", It)} file ({TransferEngine.Format(sel.Sum(t => t.Item.TotalSize))}) " +
@@ -1063,8 +1183,8 @@ public sealed partial class MainViewModel : ObservableObject
                 // Imprevisto: niente è stato tolto dal telefono (la cancellazione avviene solo alla fine, dopo le verifiche).
                 _log.Error("Trasferimento", e);
                 ReportProblem("errore imprevisto nel trasferimento");
-                ShowResult("Trasferimento interrotto", "Errore imprevisto: " + e.Message +
-                    "\n\nQuello già copiato resta sul PC. Il dettaglio è nel registro.", problems: true, folder: null);
+                ShowResult("Trasferimento interrotto", "Si è verificato un errore imprevisto e il trasferimento si è fermato." +
+                    "\n\nQuello già copiato resta sul PC.", problems: true, folder: null);
                 return;
             }
         }
@@ -1073,6 +1193,8 @@ public sealed partial class MainViewModel : ObservableObject
             if (!_demo) await conn.DisposeAsync();
             KeepAwake.Set(false);
             IsTransferring = false;
+            // Durante il trasferimento gli avvisi di Windows (telefono scollegato) si ignorano: si ricontrolla adesso.
+            _ = RefreshDevicesAsync();
         }
 
         ApplyReport(report);
@@ -1195,7 +1317,7 @@ public sealed partial class MainViewModel : ObservableObject
     private void ShowResult(string title, string text, bool problems, string? folder)
     {
         if (problems && ReportProblem($"esito: {title}"))
-            text += "\n\nIl rapporto è stato inviato in automatico per l'assistenza.";
+            text += "\n\nIl rapporto per l'assistenza verrà inviato in automatico.";
         ResultTitle = title;
         ResultText = text;
         ResultHasProblems = problems;
@@ -1273,7 +1395,9 @@ public sealed partial class MainViewModel : ObservableObject
         Line("Driver Apple", DriverInstalled ? "trovato" : "NON trovato");
         Line("iPhone", Device is null ? "nessuno" : $"{Device.DisplayName} · {Device.Model} · iOS {Device.Firmware}");
         Line("Stato", DeviceStatus);
-        Line("Ultimo rapporto", _reporter.LastResult);
+        Line("Ultimo rapporto", _reporter.LastResult + (ProblemReporter.PendingCount is > 0 and var n ? $" · {n} in coda" : ""));
+        Line("Aggiornamenti", UpdateStatus.Length > 0 ? UpdateStatus : "non ancora controllati");
+        if (_lastEnumeration is not null) Line("Ultimo elenco", _lastEnumeration);
         if (Device is not null)
         {
             Line("Elementi / file", $"{_items.Count} / {_files.Count}");
@@ -1329,7 +1453,8 @@ public sealed partial class MainViewModel : ObservableObject
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            ShowBanner("Rapporto non salvato: " + e.Message, error: true);
+            _log.Warn("Rapporto sul desktop: " + e.Message);
+            ShowBanner("Non sono riuscito a salvare il rapporto sul desktop.", error: true);
         }
     }
 
@@ -1380,9 +1505,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     partial void OnInstallBannerDismissedChanged(bool value) => OnPropertyChanged(nameof(ShowInstallBanner));
 
+    private DateTime _nextUpdateCheck = DateTime.MaxValue;
+
     private async Task CheckUpdatesAsync(bool automatic)
     {
         if (automatic && !Settings.AutoUpdate) return;
+        _nextUpdateCheck = DateTime.UtcNow + TimeSpan.FromHours(6); // un'app tenuta aperta per giorni si aggiorna lo stesso
         try
         {
             if (automatic) await Task.Delay(TimeSpan.FromSeconds(8));
@@ -1399,10 +1527,11 @@ public sealed partial class MainViewModel : ObservableObject
                 UpdateStatus = $"Versione aggiornata ({UpdateService.Current})";
             }
         }
-        catch (Exception e) when (e is System.Net.Http.HttpRequestException or TaskCanceledException or IOException or System.Text.Json.JsonException or InvalidOperationException)
+        catch (Exception e) when (e is not OutOfMemoryException)
         {
-            UpdateStatus = "Controllo non riuscito: " + e.Message;
-            if (!automatic) _log.Warn("Controllo aggiornamenti: " + e.Message);
+            // Qualunque errore (GitHub, rete, antivirus sulla cartella): si scrive nel registro e si riprova più tardi.
+            UpdateStatus = "Controllo non riuscito: riprovo più tardi";
+            _log.Warn("Controllo aggiornamenti: " + e.Message);
         }
     }
 
@@ -1421,7 +1550,7 @@ public sealed partial class MainViewModel : ObservableObject
         catch (Exception e)
         {
             _log.Error("Aggiornamento", e);
-            ShowBanner("Aggiornamento non riuscito: " + e.Message, error: true);
+            ShowBanner("Aggiornamento non riuscito: l'app riproverà più tardi.", error: true);
         }
         finally
         {
@@ -1439,7 +1568,7 @@ public sealed partial class MainViewModel : ObservableObject
         catch (Exception e)
         {
             _log.Error("Installazione sul PC", e);
-            ShowBanner("Installazione non riuscita: " + e.Message, error: true);
+            ShowBanner("Installazione sul PC non riuscita. Riprova chiudendo le altre finestre di Ponte iPhone.", error: true);
         }
     }
 
@@ -1478,6 +1607,7 @@ public sealed partial class MainViewModel : ObservableObject
             catch (Exception e) { _log.Error("Aggiornamento alla chiusura", e); }
         }
         _poll.Stop();
+        await _reporter.FlushAsync(TimeSpan.FromSeconds(5));
         _thumbs?.Dispose();
         if (_browse is not null) await _browse.DisposeAsync();
         _registry.Dispose();

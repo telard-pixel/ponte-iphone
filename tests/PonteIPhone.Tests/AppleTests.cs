@@ -14,6 +14,7 @@ public sealed class AppleTests : IDisposable
 {
     private readonly FakeAppleDevice _phone = new();
     private readonly string _dir = Directory.CreateTempSubdirectory("ponte-apple-").FullName;
+    private string _pairs => Path.Combine(_dir, "abbinamenti");
 
     public AppleTests()
     {
@@ -76,20 +77,25 @@ public sealed class AppleTests : IDisposable
         _phone.Files["/DCIM/101APPLE/IMG_0100.HEIC"] = [];
         _phone.Files["/DCIM/101APPLE/IMG_0101.HEIC"] = [];
         _phone.Files["/DCIM/101APPLE/.MISC"] = [];
-        using var backend = new AppleBackend(_phone.Client());
+        // Originale solo su iCloud: in DCIM non c'è niente, ma la libreria ha la miniatura.
+        _phone.Files["/PhotoData/Thumbnails/V2/DCIM/101APPLE/IMG_0102.HEIC/5005.JPG"] = [0xFF, 0xD8];
+        _phone.Files["/PhotoData/Thumbnails/V2/DCIM/101APPLE/IMG_0100.HEIC/5005.JPG"] = [0xFF, 0xD8]; // già contata come file vuoto
+        using var backend = new AppleBackend(_phone.Client(), _pairs);
         var dev = Assert.Single(backend.ListDevices());
         Assert.Equal(OpenState.Ready, backend.Open(dev.Id).State);
 
         var files = new List<RemoteFile>();
         backend.Enumerate(files.AddRange, CancellationToken.None);
         Assert.Equal(4, files.Count);
-        Assert.Equal(3, backend.CloudOnlyFiles); // i due nuovi più IMG_0003 del telefono di prova; .MISC no
+        // I due vuoti nuovi, IMG_0003 vuoto del telefono di prova, IMG_0102 solo miniatura; .MISC no.
+        Assert.Equal(4, backend.CloudOnlyFiles);
+        Assert.Contains("2 cartelle (0 vuote), 3 file vuoti, 1 foto con miniatura ma senza file", backend.LastEnumerationSummary);
     }
 
     [Fact]
     public void OpensListsAndReadsThroughTheAppleService()
     {
-        using var backend = new AppleBackend(_phone.Client());
+        using var backend = new AppleBackend(_phone.Client(), _pairs);
         var dev = Assert.Single(backend.ListDevices());
         Assert.Equal(AppleBackend.IdPrefix + FakeAppleDevice.Udid, dev.Id);
         Assert.Equal(FakeAppleDevice.Udid, dev.Key);
@@ -128,16 +134,54 @@ public sealed class AppleTests : IDisposable
     }
 
     [Fact]
-    public void WithoutPairRecordAsksToUnlockAndTrust()
+    public void WithoutPairRecordAsksTrustThenPairsAndSavesIt()
     {
+        // PC mai abbinato: l'app chiede lei "Autorizza", aspetta la risposta e salva l'abbinamento.
         _phone.ServePairRecord = false;
-        using var backend = new SmartBackend(new AppleBackend(_phone.Client()), () => new FakeBackend());
+        _phone.PairPendingReplies = 2;
+        var pairs = _pairs;
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), pairs), () => new FakeBackend());
         var dev = Assert.Single(backend.ListDevices());
 
+        Assert.Equal(OpenState.NotTrusted, backend.Open(dev.Id).State);
+        Assert.Equal(OpenState.NotTrusted, backend.Open(dev.Id).State);
         var opened = backend.Open(dev.Id);
 
-        Assert.Equal(OpenState.LockedOrNotTrusted, opened.State);
+        Assert.Equal(OpenState.Ready, opened.State);
         Assert.Equal(dev.Key, opened.Device.Key);
+        Assert.Equal(3, _phone.PairRequests);
+        Assert.NotNull(_phone.SavedPairRecord);
+        Assert.True(File.Exists(Path.Combine(pairs, FakeAppleDevice.Udid + ".plist")));
+        var saved = PairRecord.From(_phone.SavedPairRecord)!;
+        Assert.Equal("BUID-PC", saved.SystemBuid);
+        Assert.Equal([9, 9, 9], saved.EscrowBag);
+
+        // Riaperto dopo: l'abbinamento salvato basta, niente più richieste.
+        Assert.Equal(OpenState.Ready, backend.Open(dev.Id).State);
+        Assert.Equal(3, _phone.PairRequests);
+    }
+
+    [Fact]
+    public void PhoneThatForgotThePcIsPairedAgain()
+    {
+        _phone.TrustedHosts.Clear(); // ripristinato o "Ripristina posizione e privacy"
+        using var backend = new AppleBackend(_phone.Client(), _pairs);
+        var dev = Assert.Single(backend.ListDevices());
+        Assert.Equal(OpenState.Ready, backend.Open(dev.Id).State);
+        Assert.Equal(1, _phone.PairRequests);
+    }
+
+    [Fact]
+    public void TrustDeniedAndLockedAreToldApart()
+    {
+        _phone.ServePairRecord = false;
+        using var backend = new AppleBackend(_phone.Client(), _pairs);
+        var dev = Assert.Single(backend.ListDevices());
+        _phone.Locked = true;
+        Assert.Equal(OpenState.LockedOrNotTrusted, backend.Open(dev.Id).State);
+        _phone.Locked = false;
+        _phone.DenyPairing = true;
+        Assert.Equal(OpenState.TrustDenied, backend.Open(dev.Id).State);
     }
 
     [Fact]
@@ -145,7 +189,7 @@ public sealed class AppleTests : IDisposable
     {
         _phone.Usb = false;
         _phone.Wifi = true;
-        using var backend = new AppleBackend(_phone.Client());
+        using var backend = new AppleBackend(_phone.Client(), _pairs);
         Assert.Empty(backend.ListDevices());
     }
 
@@ -157,7 +201,7 @@ public sealed class AppleTests : IDisposable
         try
         {
             _phone.HangLockdown = true;
-            using var backend = new SmartBackend(new AppleBackend(_phone.Client()), () => new FakeBackend());
+            using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => new FakeBackend());
             var dev = Assert.Single(backend.ListDevices());
             var clock = System.Diagnostics.Stopwatch.StartNew();
             var e = Assert.Throws<DeviceException>(() => backend.Open(dev.Id));
@@ -174,7 +218,7 @@ public sealed class AppleTests : IDisposable
     [Fact]
     public void ConnectionDropIsTransientAndTheNextCallReopens()
     {
-        using var backend = new AppleBackend(_phone.Client());
+        using var backend = new AppleBackend(_phone.Client(), _pairs);
         _phone.DropAfcAfter = 3; // il primo collegamento AFC cade presto
         backend.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid);
         var e = Assert.ThrowsAny<DeviceException>(() =>
@@ -192,14 +236,14 @@ public sealed class AppleTests : IDisposable
         var fake = new FakeBackend();
         fake.Add("202610_a", "IMG_0002.JPG", 90_000, content: _phone.Files["/DCIM/100APPLE/IMG_0002.JPG"]);
         var browse = new List<RemoteFile>();
-        using (var first = new AppleBackend(_phone.Client()))
+        using (var first = new AppleBackend(_phone.Client(), _pairs))
         {
             first.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid);
             first.Enumerate(browse.AddRange, CancellationToken.None);
         }
         var item = Assert.Single(MediaGrouper.Group(browse), i => i.BaseName == "IMG_0002");
 
-        using var fresh = new SmartBackend(new AppleBackend(_phone.Client()), () => fake);
+        using var fresh = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => fake);
         await using var conn = new InProcessConnection(fresh);
         var opened = await conn.OpenAsync(AppleBackend.IdPrefix + FakeAppleDevice.Udid, CancellationToken.None);
         using var registry = new CopyRegistry(Path.Combine(_dir, "copie.db"));
@@ -214,7 +258,7 @@ public sealed class AppleTests : IDisposable
     public async Task DeleteStopsAtOnceWhenWindowsDoesNotShowThePhotos()
     {
         var fake = new FakeBackend { Locked = true }; // Windows vede il telefono ma con la memoria vuota
-        using var backend = new SmartBackend(new AppleBackend(_phone.Client()), () => fake);
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => fake);
         await using var conn = new InProcessConnection(backend);
         var opened = await conn.OpenAsync(AppleBackend.IdPrefix + FakeAppleDevice.Udid, CancellationToken.None);
         var files = new List<RemoteFile>();
@@ -248,7 +292,7 @@ public sealed class AppleTests : IDisposable
     public void LockedPhoneIsReportedAsLocked()
     {
         _phone.Locked = true;
-        using var backend = new AppleBackend(_phone.Client());
+        using var backend = new AppleBackend(_phone.Client(), _pairs);
         var opened = backend.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid);
         Assert.Equal(OpenState.LockedOrNotTrusted, opened.State);
 
@@ -259,7 +303,7 @@ public sealed class AppleTests : IDisposable
     [Fact]
     public void MissingFileBecomesNotFound()
     {
-        using var backend = new AppleBackend(_phone.Client());
+        using var backend = new AppleBackend(_phone.Client(), _pairs);
         backend.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid);
         var e = Assert.Throws<DeviceException>(() =>
             backend.Download("/DCIM/100APPLE/IMG_9999.HEIC", Path.Combine(_dir, "y.part"), _ => { }, CancellationToken.None));
@@ -269,7 +313,7 @@ public sealed class AppleTests : IDisposable
     [Fact]
     public async Task EngineCopiesThroughTheAppleChannel()
     {
-        using var backend = new SmartBackend(new AppleBackend(_phone.Client()), () => new FakeBackend());
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => new FakeBackend());
         await using var conn = new InProcessConnection(backend);
         var dev = Assert.Single(await conn.ListDevicesAsync(CancellationToken.None));
         var opened = await conn.OpenAsync(dev.Id, CancellationToken.None);
@@ -294,7 +338,7 @@ public sealed class AppleTests : IDisposable
         var fake = new FakeBackend();
         fake.Add("202610_a", "IMG_0002.JPG", 90_000, content: _phone.Files["/DCIM/100APPLE/IMG_0002.JPG"]);
         fake.Add("202610_a", "IMG_0001.HEIC", 700_000, content: _phone.Files["/DCIM/100APPLE/IMG_0001.HEIC"]);
-        using var backend = new SmartBackend(new AppleBackend(_phone.Client()), () => fake);
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => fake);
         backend.Open(Assert.Single(backend.ListDevices()).Id);
         backend.Enumerate(_ => { }, CancellationToken.None);
 
@@ -314,9 +358,22 @@ public sealed class AppleTests : IDisposable
         var b = new RemoteFile("w2", "IMG_0001.HEIC", "202601_a", 500, new DateTime(2026, 1, 3), null, true);
         var map = new Dictionary<string, List<RemoteFile>>(StringComparer.OrdinalIgnoreCase) { ["IMG_0001.HEIC"] = [a, b] };
 
-        Assert.Equal("w2", SmartBackend.Match(map, b with { ObjectId = "/DCIM/x" }));
-        Assert.Null(SmartBackend.Match(map, b with { ObjectId = "/DCIM/x", Created = null }));
-        Assert.Null(SmartBackend.Match(map, b with { Name = "IMG_0002.HEIC" }));
+        var afc = b with { ObjectId = "/DCIM/x", Folder = "100APPLE" };
+        Assert.Equal("w2", SmartBackend.Match(map, afc));
+        Assert.Null(SmartBackend.Match(map, afc with { Created = null }));
+        Assert.Null(SmartBackend.Match(map, afc with { Name = "IMG_0002.HEIC" }));
+        // Stessa cartella anche in WPD: decide quella, anche senza data.
+        Assert.Equal("w1", SmartBackend.Match(map, a with { ObjectId = "/DCIM/y", Created = null }));
+    }
+
+    [Fact]
+    public void SameNameButDifferentSizeIsNeverDeleted()
+    {
+        // L'elenco WPD ha perso una cartella: resta un solo IMG_0001.HEIC, ma è un'altra foto.
+        var other = new RemoteFile("w1", "IMG_0001.HEIC", "202501_a", 500_000, new DateTime(2025, 1, 3), null, true);
+        var map = new Dictionary<string, List<RemoteFile>>(StringComparer.OrdinalIgnoreCase) { ["IMG_0001.HEIC"] = [other] };
+        var mine = new RemoteFile("/DCIM/120APPLE/IMG_0001.HEIC", "IMG_0001.HEIC", "120APPLE", 800_000, new DateTime(2026, 1, 3), null, true);
+        Assert.Null(SmartBackend.Match(map, mine));
     }
 
     public void Dispose()

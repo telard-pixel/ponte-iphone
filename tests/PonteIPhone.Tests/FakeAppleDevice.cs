@@ -37,6 +37,17 @@ public sealed class FakeAppleDevice : IDisposable
     public bool Wifi { get; set; }
     public int SessionsWithClientCert;
 
+    // --- abbinamento ("Autorizza questo computer?") ---
+    /// <summary>HostID che il telefono riconosce (all'inizio quello del record servito dal servizio).</summary>
+    public HashSet<string> TrustedHosts { get; } = ["HOST-ID-1"];
+    /// <summary>Quante richieste Pair rispondono "in attesa" prima che l'utente tocchi Autorizza.</summary>
+    public int PairPendingReplies;
+    public bool DenyPairing;
+    public int PairRequests;
+    /// <summary>Record salvato con SavePairRecord (null finché nessuno salva).</summary>
+    public byte[]? SavedPairRecord;
+    private readonly RSA _devicePairKey = RSA.Create(2048);
+
     public FakeAppleDevice()
     {
         // Un solo orario per tutti i certificati: il figlio non può scadere dopo chi lo firma.
@@ -116,9 +127,19 @@ public sealed class FakeAppleDevice : IDisposable
                 break;
             }
             case "ReadPairRecord":
-                MuxReply(s, tag, ServePairRecord
-                    ? new Dictionary<string, object> { ["PairRecordData"] = PairRecordXml }
+            {
+                var record = SavedPairRecord ?? (ServePairRecord ? PairRecordXml : null);
+                MuxReply(s, tag, record is not null
+                    ? new Dictionary<string, object> { ["PairRecordData"] = record }
                     : new Dictionary<string, object> { ["MessageType"] = "Result", ["Number"] = 2L });
+                break;
+            }
+            case "ReadBUID":
+                MuxReply(s, tag, new Dictionary<string, object> { ["BUID"] = "BUID-PC" });
+                break;
+            case "SavePairRecord":
+                SavedPairRecord = msg.GetData("PairRecordData");
+                MuxReply(s, tag, new Dictionary<string, object> { ["MessageType"] = "Result", ["Number"] = 0L });
                 break;
             case "Connect":
             {
@@ -181,9 +202,33 @@ public sealed class FakeAppleDevice : IDisposable
             {
                 case "QueryType": reply["Type"] = "com.apple.mobile.lockdown"; break;
                 case "StartSession":
-                    if (msg.GetString("HostID") != "HOST-ID-1") reply["Error"] = "InvalidHostID";
+                    if (!TrustedHosts.Contains(msg.GetString("HostID") ?? "")) reply["Error"] = "InvalidHostID";
                     else { reply["SessionID"] = "S1"; reply["EnableSessionSSL"] = true; }
                     break;
+                case "GetValue" when msg.GetString("Key") == "DevicePublicKey":
+                    reply["Value"] = Encoding.ASCII.GetBytes(_devicePairKey.ExportRSAPublicKeyPem() + "\n");
+                    break;
+                case "GetValue" when msg.GetString("Key") == "WiFiAddress":
+                    reply["Value"] = "aa:bb:cc:dd:ee:ff";
+                    break;
+                case "Pair":
+                {
+                    Interlocked.Increment(ref PairRequests);
+                    var record = msg.GetDict("PairRecord");
+                    if (Locked) reply["Error"] = "PasswordProtected";
+                    else if (DenyPairing) reply["Error"] = "UserDeniedPairing";
+                    else if (PairPendingReplies > 0) { PairPendingReplies--; reply["Error"] = "PairingDialogResponsePending"; }
+                    else if (record?.GetData("DeviceCertificate") is not { } devCert || record.GetString("HostID") is not { } host) reply["Error"] = "InvalidPairRecord";
+                    else
+                    {
+                        // Come il telefono vero: il certificato del telefono deve contenere la sua chiave pubblica.
+                        using var cert = X509Certificate2.CreateFromPem(Encoding.ASCII.GetString(devCert));
+                        using var key = cert.GetRSAPublicKey()!;
+                        if (!key.ExportRSAPublicKey().AsSpan().SequenceEqual(_devicePairKey.ExportRSAPublicKey())) reply["Error"] = "InvalidPairRecord";
+                        else { TrustedHosts.Add(host); reply["EscrowBag"] = new byte[] { 9, 9, 9 }; }
+                    }
+                    break;
+                }
                 case "GetValue":
                     reply["Value"] = new Dictionary<string, object>
                     {
