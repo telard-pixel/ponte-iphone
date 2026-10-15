@@ -27,6 +27,9 @@ public sealed partial class AppleBackend : IDeviceBackend
     private AfcClient? _afc;
     /// <summary>Telefono aperto per ultimo: dopo un intoppo si riapre da solo alla chiamata successiva.</summary>
     private string? _openedId;
+    /// <summary>Abbinamento e numero usbmux con cui si è aperto il telefono (per controllare se è bloccato).</summary>
+    private PairRecord? _openedPair;
+    private int _openedMuxId;
     private readonly List<string> _notes = [];
 
     private readonly string _pairFolder;
@@ -172,6 +175,8 @@ public sealed partial class AppleBackend : IDeviceBackend
 
             step = "collegamento ad AFC";
             _afc = ConnectAfc(dev.DeviceId, service, pair);
+            _openedPair = pair;
+            _openedMuxId = dev.DeviceId;
         }
         catch (Exception e) when (e is IOException or EndOfStreamException or FormatException or System.Xml.XmlException)
         {
@@ -228,6 +233,32 @@ public sealed partial class AppleBackend : IDeviceBackend
     }
 
     private bool _afcEncrypted;
+
+    /// <summary>
+    /// True se l'iPhone aperto è bloccato adesso, null se non si riesce a saperlo. AFC si apre anche da bloccato
+    /// (escrow bag), WPD no: per cancellare serve saperlo. Si chiede ad AFC senza escrow bag, come al primo tentativo
+    /// di <see cref="Open"/>: da bloccato risponde "PasswordProtected".
+    /// </summary>
+    public bool? IsLocked()
+    {
+        if (_openedPair is not { } pair) return null;
+        try
+        {
+            using var lockdown = new LockdownClient(_mux.Connect(_openedMuxId, LockdownClient.Port));
+            lockdown.StartSession(pair);
+            lockdown.StartService(AfcClient.Service);
+            return false;
+        }
+        catch (LockdownException e) when (e.Error == "PasswordProtected")
+        {
+            return true;
+        }
+        catch (Exception e) when (e is LockdownException or UsbmuxException or IOException or EndOfStreamException
+                                      or FormatException or System.Xml.XmlException or System.Security.Authentication.AuthenticationException)
+        {
+            return null;
+        }
+    }
 
     private static Dictionary<string, object> SafeValues(LockdownClient lockdown)
     {

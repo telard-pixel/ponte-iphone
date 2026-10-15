@@ -82,8 +82,8 @@ public sealed record RemoteFile(
     public string Extension => Path.GetExtension(Name).TrimStart('.').ToUpperInvariant();
 }
 
-/// <summary>Esito di una cancellazione dal telefono, file per file.</summary>
-public sealed record DeleteResult(string ObjectId, bool Ok, int HResult)
+/// <summary>Esito di una cancellazione dal telefono, file per file. Detail: cosa ha visto Windows, per il registro.</summary>
+public sealed record DeleteResult(string ObjectId, bool Ok, int HResult, string? Detail = null)
 {
     [JsonIgnore]
     public bool Refused => !Ok && DeviceErrors.IsRefusal(HResult);

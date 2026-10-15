@@ -670,6 +670,7 @@ public sealed class TransferEngine
         var queue = new Queue<MediaItem>(items);
         var retries = new Dictionary<MediaItem, int>();
         bool probed = false;
+        bool waitingUnlock = false;
 
         // Al terzo errore lo stesso elemento resta sul telefono. L'attesa dello sblocco non conta come errore.
         void Requeue(IEnumerable<MediaItem> again, bool countAsError)
@@ -729,6 +730,25 @@ public sealed class TransferEngine
             }
 
             var byId = results.GroupBy(r => r.ObjectId).ToDictionary(g => g.Key, g => g.Last());
+
+            // iPhone bloccato: Windows non ne mostra le foto finché non si sblocca (il canale Apple sì, per questo
+            // l'app le vede). Si aspetta lo sblocco senza contare errori, come per la copia.
+            if (results.Count > 0 && results.All(r => r.HResult == DeviceErrors.LockedForDelete))
+            {
+                if (!waitingUnlock) _log?.Info("Eliminazione: l'iPhone è bloccato, aspetto che venga sbloccato");
+                waitingUnlock = true;
+                SetPhase(TransferPhase.WaitingForDevice, "Sblocca l'iPhone per eliminare: si riprende da solo");
+                Requeue(deletable, countAsError: false);
+                await Task.Delay(_poll, ct);
+                continue;
+            }
+            if (waitingUnlock)
+            {
+                waitingUnlock = false;
+                _log?.Info("iPhone sbloccato: riprendo l'eliminazione");
+                SetPhase(TransferPhase.Deleting, deleting);
+            }
+
             var failed = new List<(MediaItem Item, bool Refused)>();
             foreach (var item in deletable)
             {
@@ -758,7 +778,7 @@ public sealed class TransferEngine
             {
                 _report.DeleteProblem ??= DeviceErrors.Describe(stop.HResult);
                 _report.DeleteFailed += failed.Count + queue.Count;
-                _log?.Warn("Cancellazione non possibile: " + _report.DeleteProblem);
+                _log?.Warn("Cancellazione non possibile: " + _report.DeleteProblem + (stop.Detail is { } why ? $" [{why}]" : ""));
                 return;
             }
 

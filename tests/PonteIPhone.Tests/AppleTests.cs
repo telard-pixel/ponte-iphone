@@ -258,7 +258,7 @@ public sealed class AppleTests : IDisposable
     public async Task DeleteStopsAtOnceWhenWindowsDoesNotShowThePhotos()
     {
         var fake = new FakeBackend { Locked = true }; // Windows vede il telefono ma con la memoria vuota
-        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => fake);
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => fake, sleep: _ => { });
         await using var conn = new InProcessConnection(backend);
         var opened = await conn.OpenAsync(AppleBackend.IdPrefix + FakeAppleDevice.Udid, CancellationToken.None);
         var files = new List<RemoteFile>();
@@ -274,6 +274,57 @@ public sealed class AppleTests : IDisposable
         Assert.Equal(2, report.DeleteFailed);
         Assert.Contains("Windows non mostra", report.DeleteProblem);
         Assert.Empty(fake.Deleted);
+    }
+
+    [Fact]
+    public void IsLockedTellsLockedFromUnlocked()
+    {
+        using var backend = new AppleBackend(_phone.Client(), _pairs);
+        Assert.Null(backend.IsLocked()); // telefono non ancora aperto: non si sa
+        backend.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid);
+        Assert.False(backend.IsLocked());
+        _phone.Locked = true;
+        Assert.True(backend.IsLocked());
+    }
+
+    [Fact]
+    public async Task DeleteWaitsForTheUnlockInsteadOfGivingUp()
+    {
+        // 15/10: l'app mostrava le foto (il canale Apple legge anche da bloccato), ma Elimina si fermava subito
+        // perché Windows, col telefono bloccato, non le mostra. Ora aspetta lo sblocco e poi elimina.
+        var fake = new FakeBackend();
+        fake.Add("202610_a", "IMG_0002.JPG", 90_000, content: _phone.Files["/DCIM/100APPLE/IMG_0002.JPG"]);
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => fake, sleep: _ => { });
+        await using var conn = new InProcessConnection(backend);
+        var opened = await conn.OpenAsync(AppleBackend.IdPrefix + FakeAppleDevice.Udid, CancellationToken.None);
+        var files = new List<RemoteFile>();
+        await conn.EnumerateAsync(files.AddRange, CancellationToken.None);
+        var item = Assert.Single(MediaGrouper.Group(files), i => i.BaseName == "IMG_0002");
+        _phone.Locked = true;
+        fake.Locked = true;
+        var waited = false;
+        var progress = new SyncProgress(s =>
+        {
+            if (s.Phase != TransferPhase.WaitingForDevice) return;
+            waited = true;
+            _phone.Locked = false; // l'utente sblocca
+            fake.Locked = false;
+        });
+        using var registry = new CopyRegistry(Path.Combine(_dir, "copie.db"));
+
+        var report = await new TransferEngine(conn, opened.Device, registry, converter: null)
+            .DeleteAsync([item], new TransferOptions { DestinationRoot = _dir, DevicePollInterval = TimeSpan.FromMilliseconds(20) },
+                progress, CancellationToken.None);
+
+        Assert.True(waited);
+        Assert.Equal(1, report.Deleted);
+        Assert.Null(report.DeleteProblem);
+        Assert.Equal(["IMG_0002.JPG"], fake.Deleted);
+    }
+
+    private sealed class SyncProgress(Action<TransferStatus> on) : IProgress<TransferStatus>
+    {
+        public void Report(TransferStatus value) => on(value);
     }
 
     [Fact]

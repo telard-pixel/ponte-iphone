@@ -49,6 +49,7 @@ public static class DeviceErrors
     public const int NoWpdMatch = unchecked((int)0xA0050004);       // nostro: file non ritrovato nella via di Windows per cancellarlo
     public const int WpdUnavailable = unchecked((int)0xA0050005);   // nostro: Windows non mostra le foto del telefono (serve per cancellare)
     public const int WpdAmbiguous = unchecked((int)0xA0050006);     // nostro: più iPhone collegati, non si sa quale cancellare
+    public const int LockedForDelete = unchecked((int)0xA0050007);  // nostro: iPhone bloccato, Windows non mostra le foto finché non si sblocca
 
     /// <summary>Errori per cui insistere con gli altri file è inutile: la cancellazione si ferma e lo dice.</summary>
     public static bool StopsDeletion(int hr) => hr is WpdUnavailable or WpdAmbiguous;
@@ -82,6 +83,7 @@ public static class DeviceErrors
         NoWpdMatch => "Windows non mostra questa foto, quindi non posso eliminarla: eliminala dall'app Foto",
         WpdUnavailable => "Windows non mostra le foto di questo iPhone, che servono per eliminarle. Sblocca l'iPhone, scollega e ricollega il cavo e riprova, oppure eliminale dall'app Foto (hanno il bollino ✓ PC)",
         WpdAmbiguous => "ci sono più iPhone collegati: per eliminare lascia collegato solo questo",
+        LockedForDelete => "l'iPhone è bloccato: per eliminare va sbloccato",
         0 => "errore sconosciuto",
         _ => $"errore 0x{hr:X8}",
     };

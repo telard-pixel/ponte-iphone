@@ -23,11 +23,16 @@ public sealed class SmartBackend : IDeviceBackend
     private string? _wpdFilesFor;
     /// <summary>Perché WPD non è utilizzabile (per non riprovare a ogni gruppo di file).</summary>
     private int _wpdProblem;
+    /// <summary>Cosa ha visto WPD quando non è utilizzabile (cartelle, memoria): finisce nel registro.</summary>
+    private string? _wpdDetail;
+    private readonly Action<TimeSpan> _sleep;
 
-    public SmartBackend(AppleBackend apple, Func<IDeviceBackend> wpdFactory)
+    /// <param name="sleep">Attesa tra due tentativi WPD (nei test non aspetta).</param>
+    public SmartBackend(AppleBackend apple, Func<IDeviceBackend> wpdFactory, Action<TimeSpan>? sleep = null)
     {
         _apple = apple;
         _wpdFactory = wpdFactory;
+        _sleep = sleep ?? Thread.Sleep;
     }
 
     private IDeviceBackend Wpd => _wpd ??= _wpdFactory();
@@ -74,7 +79,22 @@ public sealed class SmartBackend : IDeviceBackend
     public IReadOnlyList<DeleteResult> Delete(IReadOnlyList<string> objectIds)
     {
         var map = WpdFiles();
-        if (map is null) return objectIds.Select(id => new DeleteResult(id, false, _wpdProblem)).ToList();
+        // Il 15/10 l'eliminazione si fermava subito con "Windows non mostra le foto": il canale Apple legge anche
+        // col telefono bloccato, WPD no. Se è bloccato lo si dice (il motore aspetta lo sblocco e riprova);
+        // altrimenti si riprova un paio di volte, perché appena ricollegato Windows mostra la memoria con qualche secondo di ritardo.
+        for (int attempt = 1; map is null && _wpdProblem == DeviceErrors.WpdUnavailable; attempt++)
+        {
+            if (_apple.IsLocked() == true)
+            {
+                ForgetWpd();
+                return objectIds.Select(id => new DeleteResult(id, false, DeviceErrors.LockedForDelete)).ToList();
+            }
+            if (attempt == 3) break;
+            _sleep(TimeSpan.FromSeconds(4));
+            ForgetWpd();
+            map = WpdFiles();
+        }
+        if (map is null) return objectIds.Select(id => new DeleteResult(id, false, _wpdProblem, _wpdDetail)).ToList();
 
         var results = new List<DeleteResult>(objectIds.Count);
         foreach (var id in objectIds)
@@ -108,6 +128,7 @@ public sealed class SmartBackend : IDeviceBackend
         _wpdFiles = null;
         _wpdFilesFor = null;
         _wpdProblem = 0;
+        _wpdDetail = null;
     }
 
     private static void RemoveFromMap(Dictionary<string, List<RemoteFile>> map, string wpdId)
@@ -119,22 +140,26 @@ public sealed class SmartBackend : IDeviceBackend
     private Dictionary<string, List<RemoteFile>>? WpdFiles()
     {
         var udid = _apple.OpenedUdid;
-        if (udid is null) { _wpdProblem = DeviceErrors.WpdUnavailable; return null; }
+        if (udid is null) { _wpdProblem = DeviceErrors.WpdUnavailable; _wpdDetail = "telefono non aperto"; return null; }
         if (_wpdFiles is not null && _wpdFilesFor == udid) return _wpdFiles;
         if (_wpdProblem != 0 && _wpdFilesFor == udid) return null;
         _wpdFilesFor = udid;
         try
         {
-            var dev = PickWpdDevice(Wpd.ListDevices(), udid, _apple.UsbDeviceCount());
+            var all = Wpd.ListDevices();
+            var dev = PickWpdDevice(all, udid, _apple.UsbDeviceCount());
             if (dev is null)
             {
-                _wpdProblem = DeviceErrors.WpdAmbiguous;
+                // Nessun iPhone in Windows è un "non mostra", non un "più telefoni".
+                _wpdProblem = all.Count == 0 ? DeviceErrors.WpdUnavailable : DeviceErrors.WpdAmbiguous;
+                _wpdDetail = $"Windows vede {all.Count} dispositivi portatili";
                 return null;
             }
             var opened = Wpd.Open(dev.Id);
             if (!opened.Ready)
             {
                 _wpdProblem = DeviceErrors.WpdUnavailable;
+                _wpdDetail = $"Windows: {opened.State}; " + string.Join(" | ", opened.Notes ?? []);
                 return null;
             }
             var map = new Dictionary<string, List<RemoteFile>>(StringComparer.OrdinalIgnoreCase);
@@ -149,14 +174,16 @@ public sealed class SmartBackend : IDeviceBackend
             if (map.Count == 0)
             {
                 _wpdProblem = DeviceErrors.WpdUnavailable;
+                _wpdDetail = "Windows apre l'iPhone ma non elenca nessun file; " + string.Join(" | ", opened.Notes ?? []);
                 return null;
             }
             _wpdProblem = 0;
             return _wpdFiles = map;
         }
-        catch (DeviceException)
+        catch (DeviceException e)
         {
             _wpdProblem = DeviceErrors.WpdUnavailable;
+            _wpdDetail = "errore di Windows: " + e.Message;
             return null;
         }
     }
