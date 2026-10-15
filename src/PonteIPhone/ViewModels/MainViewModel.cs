@@ -1395,7 +1395,7 @@ public sealed partial class MainViewModel : ObservableObject
         Line("Driver Apple", DriverInstalled ? "trovato" : "NON trovato");
         Line("iPhone", Device is null ? "nessuno" : $"{Device.DisplayName} · {Device.Model} · iOS {Device.Firmware}");
         Line("Stato", DeviceStatus);
-        Line("Ultimo rapporto", _reporter.LastResult + (ProblemReporter.PendingCount is > 0 and var n ? $" · {n} in coda" : ""));
+        Line("Ultimo rapporto", _reporter.LastResult + (ProblemReporter.PendingCount is > 0 and var queued ? $" · {queued} in coda" : ""));
         Line("Aggiornamenti", UpdateStatus.Length > 0 ? UpdateStatus : "non ancora controllati");
         if (_lastEnumeration is not null) Line("Ultimo elenco", _lastEnumeration);
         if (Device is not null)
