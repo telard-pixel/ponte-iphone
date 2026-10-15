@@ -121,13 +121,13 @@ public sealed partial class AppleBackend : IDeviceBackend
                 var (outcome, fresh) = Pair(lockdown, dev, udid);
                 if (outcome != PairOutcome.Paired || fresh is null)
                 {
-                    var state = outcome switch
+                    var waiting = outcome switch
                     {
                         PairOutcome.Denied => OpenState.TrustDenied,
                         PairOutcome.Locked => OpenState.LockedOrNotTrusted,
                         _ => OpenState.NotTrusted,
                     };
-                    return new OpenResult(info, null, state, _notes.ToList());
+                    return new OpenResult(info, null, waiting, _notes.ToList());
                 }
                 pair = fresh;
                 step = "sessione cifrata";
