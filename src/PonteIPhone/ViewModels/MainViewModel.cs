@@ -32,6 +32,9 @@ public enum AppScreen
 
 public enum LibraryFilter { All, Photos, Live, Videos, Screenshots, NotCopied }
 
+/// <summary>Perché il telefono collegato non mostra ancora le foto: decide titolo e testo della schermata.</summary>
+public enum PhoneWait { Locked, NotTrusted, Denied, Connecting }
+
 public sealed partial class MainViewModel : ObservableObject
 {
     private static readonly CultureInfo It = CultureInfo.GetCultureInfo("it-IT");
@@ -158,12 +161,9 @@ public sealed partial class MainViewModel : ObservableObject
         string.Join(" · ", new[] { Device.Model, string.IsNullOrWhiteSpace(Device.Firmware) ? "" : "iOS " + Device.Firmware }
             .Where(s => !string.IsNullOrWhiteSpace(s)));
 
-    /// <summary>Perché il telefono collegato non mostra ancora le foto: decide titolo e testo della schermata.</summary>
-    public enum WaitReason { Locked, NotTrusted, Denied, Connecting }
+    [ObservableProperty] private PhoneWait _waitReason = PhoneWait.Connecting;
 
-    [ObservableProperty] private WaitReason _waitReason = WaitReason.Connecting;
-
-    partial void OnWaitReasonChanged(WaitReason value)
+    partial void OnWaitReasonChanged(PhoneWait value)
     {
         OnPropertyChanged(nameof(WaitTitle));
         OnPropertyChanged(nameof(WaitText));
@@ -172,17 +172,17 @@ public sealed partial class MainViewModel : ObservableObject
 
     public string WaitTitle => WaitReason switch
     {
-        WaitReason.NotTrusted => "Tocca “Autorizza” sull'iPhone",
-        WaitReason.Denied => "L'iPhone non ha autorizzato questo PC",
-        WaitReason.Connecting => "Collegamento all'iPhone…",
+        PhoneWait.NotTrusted => "Tocca “Autorizza” sull'iPhone",
+        PhoneWait.Denied => "L'iPhone non ha autorizzato questo PC",
+        PhoneWait.Connecting => "Collegamento all'iPhone…",
         _ => "Sblocca l'iPhone",
     };
 
     public string WaitText => WaitReason switch
     {
-        WaitReason.NotTrusted => "Sul telefono è comparso “Autorizzare questo computer?”: tocca Autorizza e inserisci il codice. Se non lo vedi, sblocca il telefono.",
-        WaitReason.Denied => "Sul telefono è stato toccato “Non autorizzare”. Scollega il cavo e ricollegalo con l'iPhone sbloccato: la domanda ricompare, e questa volta tocca Autorizza.",
-        WaitReason.Connecting => "Il telefono si è appena collegato: ancora un attimo.",
+        PhoneWait.NotTrusted => "Sul telefono è comparso “Autorizzare questo computer?”: tocca Autorizza e inserisci il codice. Se non lo vedi, sblocca il telefono.",
+        PhoneWait.Denied => "Sul telefono è stato toccato “Non autorizzare”. Scollega il cavo e ricollegalo con l'iPhone sbloccato: la domanda ricompare, e questa volta tocca Autorizza.",
+        PhoneWait.Connecting => "Il telefono si è appena collegato: ancora un attimo.",
         _ => "Il telefono è collegato ma bloccato. Sbloccalo: l'app riprova da sola ogni pochi secondi.",
     };
 
@@ -191,9 +191,9 @@ public sealed partial class MainViewModel : ObservableObject
         AppScreen.NoDevice => "Non collegato",
         AppScreen.Locked => WaitReason switch
         {
-            WaitReason.NotTrusted => "Da autorizzare",
-            WaitReason.Denied => "Non autorizzato",
-            WaitReason.Connecting => "Collegamento…",
+            PhoneWait.NotTrusted => "Da autorizzare",
+            PhoneWait.Denied => "Non autorizzato",
+            PhoneWait.Connecting => "Collegamento…",
             _ => "Bloccato: sbloccalo",
         },
         AppScreen.NoCameraRoll => "Collegato, senza foto",
@@ -314,7 +314,7 @@ public sealed partial class MainViewModel : ObservableObject
                 return;
             }
             Device = dev;
-            ShowWait(WaitReason.Connecting, retryIn: TimeSpan.FromSeconds(3));
+            ShowWait(PhoneWait.Connecting, retryIn: TimeSpan.FromSeconds(3));
             return;
         }
 
@@ -327,16 +327,16 @@ public sealed partial class MainViewModel : ObservableObject
         switch (result.State)
         {
             case OpenState.LockedOrNotTrusted:
-                ShowWait(WaitReason.Locked, retryIn: TimeSpan.FromSeconds(3));
+                ShowWait(PhoneWait.Locked, retryIn: TimeSpan.FromSeconds(3));
                 return;
             case OpenState.NotTrusted:
-                ShowWait(WaitReason.NotTrusted, retryIn: TimeSpan.FromSeconds(2));
+                ShowWait(PhoneWait.NotTrusted, retryIn: TimeSpan.FromSeconds(2));
                 return;
             case OpenState.TrustDenied:
-                ShowWait(WaitReason.Denied, retryIn: TimeSpan.FromSeconds(10));
+                ShowWait(PhoneWait.Denied, retryIn: TimeSpan.FromSeconds(10));
                 return;
             case OpenState.NotReady:
-                ShowWait(WaitReason.Connecting, retryIn: TimeSpan.FromSeconds(1.5));
+                ShowWait(PhoneWait.Connecting, retryIn: TimeSpan.FromSeconds(1.5));
                 return;
             case OpenState.NoCameraRoll:
                 ShowNoPhotos();
@@ -360,13 +360,13 @@ public sealed partial class MainViewModel : ObservableObject
         _log.Info("iPhone: " + text);
     }
 
-    private void ShowWait(WaitReason reason, TimeSpan retryIn)
+    private void ShowWait(PhoneWait reason, TimeSpan retryIn)
     {
         WaitReason = reason;
         Screen = AppScreen.Locked;
         _nextOpen = DateTime.UtcNow + retryIn;
         // "Collegamento…" e "Autorizza" non sono un blocco: l'avviso "è già sbloccato?" e il rapporto solo per il resto.
-        SetLocked(reason is WaitReason.Locked or WaitReason.Denied);
+        SetLocked(reason is PhoneWait.Locked or PhoneWait.Denied);
     }
 
     private void ShowNoPhotos()
@@ -396,7 +396,7 @@ public sealed partial class MainViewModel : ObservableObject
         else _lockedSince ??= DateTime.UtcNow;
         LockedForAWhile = _lockedSince is { } t && DateTime.UtcNow - t > TimeSpan.FromSeconds(20);
         if (_lockedSince is { } since && DateTime.UtcNow - since > TimeSpan.FromMinutes(1))
-            ReportProblem(WaitReason == WaitReason.Denied ? "autorizzazione negata sull'iPhone" : "iPhone collegato ma bloccato da più di un minuto");
+            ReportProblem(WaitReason == PhoneWait.Denied ? "autorizzazione negata sull'iPhone" : "iPhone collegato ma bloccato da più di un minuto");
     }
 
     private void CloseLibrary()
@@ -529,7 +529,7 @@ public sealed partial class MainViewModel : ObservableObject
                     Screen = AppScreen.Library;
                     ShowBanner("Il telefono non risponde. Sbloccalo e premi Rileggi (in alto a destra).", error: true);
                 }
-                else ShowWait(WaitReason.Locked, retryIn: TimeSpan.FromSeconds(3));
+                else ShowWait(PhoneWait.Locked, retryIn: TimeSpan.FromSeconds(3));
                 ReportProblem("lettura della libreria non riuscita");
             }
         }
