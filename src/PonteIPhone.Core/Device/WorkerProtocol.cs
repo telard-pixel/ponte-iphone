@@ -17,6 +17,7 @@ internal static class WorkerProtocol
     public const string OpDownload = "download";
     public const string OpDelete = "delete";
     public const string OpCancel = "cancel";
+    public const string OpStorage = "storage";
 
     public const string KindOk = "ok";
     public const string KindError = "err";

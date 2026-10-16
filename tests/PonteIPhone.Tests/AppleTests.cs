@@ -277,6 +277,52 @@ public sealed class AppleTests : IDisposable
     }
 
     [Fact]
+    public void StorageIsSplitLikeITunes()
+    {
+        using var backend = new AppleBackend(_phone.Client(), _pairs);
+        Assert.True(backend.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid).Ready);
+
+        var b = backend.GetStorage(CancellationToken.None);
+
+        Assert.Equal(128_000_000_000, b.Capacity);
+        Assert.Equal(40_000_000_000, b.Free);
+        Assert.Equal(b.Capacity, b.Slices.Sum(x => x.Bytes)); // la barra torna sempre al totale
+        long Slice(string key) => b.Slices.FirstOrDefault(x => x.Key == key)?.Bytes ?? 0;
+        Assert.Equal(12_000_000_000, Slice("system"));                    // disco meno partizione dati
+        Assert.Equal(720_000_000, Slice("apps"));
+        Assert.Equal(10_000_000_000, Slice("appdata"));
+        Assert.Equal(700_000 + 1_200_000 + 90_000 + 80_000 + 7, Slice("photos")); // DCIM + libreria di Foto
+        Assert.Equal(0, Slice("music"));
+        Assert.True(Slice("other") > 0);
+        Assert.Equal(["WhatsApp", "Maps", "Calcolatrice X"], b.Apps.Select(a => a.Name));
+        Assert.Empty(b.Notes);
+    }
+
+    [Fact]
+    public void StorageBarNeverExceedsTheTotal()
+    {
+        // Dimensioni delle app arrotondate per eccesso dal telefono: più grandi dell'usato.
+        var b = StorageBreakdown.Build(100, 60, 10, [new AppUsage("A", "a", 30, 40)], photos: 5, music: 0, books: 0, notes: []);
+        Assert.Equal(100, b.Slices.Sum(x => x.Bytes));
+        Assert.Equal(60, b.Slices.Single(x => x.Key == "free").Bytes);
+        Assert.DoesNotContain(b.Slices, x => x.Key == "other");
+    }
+
+    [Fact]
+    public void UnpluggedPhoneIsNoticedAtOnce()
+    {
+        // iOS 26+: lo schermo si blocca e l'iPhone chiude i dati. Prima l'app aspettava 25 s a vuoto.
+        using var backend = new AppleBackend(_phone.Client(), _pairs);
+        Assert.True(backend.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid).Ready);
+        _phone.Unplug();
+        Thread.Sleep(500);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var e = Assert.Throws<DeviceException>(() => backend.Enumerate(_ => { }, CancellationToken.None));
+        Assert.Equal(DeviceErrorKind.Gone, e.Kind);
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public void IsLockedTellsLockedFromUnlocked()
     {
         using var backend = new AppleBackend(_phone.Client(), _pairs);

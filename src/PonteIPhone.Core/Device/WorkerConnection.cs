@@ -375,6 +375,13 @@ public sealed class WorkerConnection : IDeviceConnection
         return data?.Deserialize<List<DeleteResult>>(WorkerProtocol.Json) ?? [];
     }
 
+    public async Task<StorageBreakdown?> GetStorageAsync(CancellationToken ct)
+    {
+        // Somma migliaia di file uno per uno, senza messaggi intermedi: tempo largo (la libreria di Foto ha un suo limite).
+        var data = await CallAsync(new WireRequest { Op = WorkerProtocol.OpStorage }, TimeSpan.FromMinutes(3), ct);
+        return data is { ValueKind: JsonValueKind.Object } d ? d.Deserialize<StorageBreakdown>(WorkerProtocol.Json) : null;
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;

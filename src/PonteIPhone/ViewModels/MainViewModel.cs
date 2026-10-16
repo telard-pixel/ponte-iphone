@@ -101,6 +101,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     [ObservableProperty] private AppScreen _screen = AppScreen.NoDevice;
     [ObservableProperty] private bool _isSettingsOpen;
+    [ObservableProperty] private bool _isStorageOpen;
     [ObservableProperty] private bool _driverInstalled = true;
     [ObservableProperty] private DeviceInfo? _device;
     [ObservableProperty] private StorageInfo? _storage;
@@ -109,23 +110,43 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool _bannerIsError;
 
     public bool HasDevice => Device is not null && Screen is AppScreen.Library or AppScreen.Loading;
-    public bool ShowNoDevice => !IsSettingsOpen && Screen == AppScreen.NoDevice;
-    public bool ShowLocked => !IsSettingsOpen && Screen == AppScreen.Locked;
-    public bool ShowNoCameraRoll => !IsSettingsOpen && Screen == AppScreen.NoCameraRoll;
-    public bool ShowLibrary => !IsSettingsOpen && Screen is AppScreen.Library or AppScreen.Loading;
+    /// <summary>Una pagina (Impostazioni o Spazio) copre la schermata del telefono.</summary>
+    public bool IsPageOpen => IsSettingsOpen || IsStorageOpen;
+    public bool ShowNoDevice => !IsPageOpen && Screen == AppScreen.NoDevice;
+    public bool ShowLocked => !IsPageOpen && Screen == AppScreen.Locked;
+    public bool ShowNoCameraRoll => !IsPageOpen && Screen == AppScreen.NoCameraRoll;
+    public bool ShowLibrary => !IsPageOpen && Screen is AppScreen.Library or AppScreen.Loading;
     public bool IsLoading => Screen == AppScreen.Loading;
     public bool ShowBottomBar => ShowLibrary || IsTransferring;
     public bool ShowActions => ShowLibrary && !IsTransferring;
     /// <summary>Voce attiva della barra laterale ("Settings" o il nome del filtro).</summary>
-    public string ActiveNav => IsSettingsOpen ? "Settings" : Filter.ToString();
+    public string ActiveNav => IsSettingsOpen ? "Settings" : IsStorageOpen ? "Storage" : Filter.ToString();
 
-    partial void OnScreenChanged(AppScreen value) => RaiseScreen();
-    partial void OnIsSettingsOpenChanged(bool value) => RaiseScreen();
+    partial void OnScreenChanged(AppScreen value)
+    {
+        // La pagina dello spazio è del telefono aperto: se il telefono va via, si chiude.
+        if (value is not (AppScreen.Library or AppScreen.Loading)) IsStorageOpen = false;
+        RaiseScreen();
+    }
+    partial void OnIsSettingsOpenChanged(bool value)
+    {
+        if (value) IsStorageOpen = false;
+        RaiseScreen();
+    }
+    partial void OnIsStorageOpenChanged(bool value)
+    {
+        if (value) IsSettingsOpen = false;
+        RaiseScreen();
+    }
 
     private void RaiseScreen()
     {
         OnPropertyChanged(nameof(HasDevice));
+        OnPropertyChanged(nameof(IsPageOpen));
         OnPropertyChanged(nameof(ShowNoDevice));
+        OnPropertyChanged(nameof(NoDeviceTitle));
+        OnPropertyChanged(nameof(NoDeviceText));
+        OnPropertyChanged(nameof(ShowDropHint));
         OnPropertyChanged(nameof(ShowLocked));
         OnPropertyChanged(nameof(ShowNoCameraRoll));
         OnPropertyChanged(nameof(ShowLibrary));
@@ -267,7 +288,7 @@ public sealed partial class MainViewModel : ObservableObject
             if (Device is { } current && Screen is AppScreen.Library or AppScreen.Loading)
             {
                 if (list.Any(d => d.Id == current.Id)) return;
-                _log.Info("iPhone scollegato");
+                NoteDrop(current);
                 CloseLibrary();
                 Screen = AppScreen.NoDevice;
                 ShowBanner(null);
@@ -510,6 +531,7 @@ public sealed partial class MainViewModel : ObservableObject
             Regroup();
             if (e.Kind == DeviceErrorKind.Gone)
             {
+                if (Device is { } gone) NoteDrop(gone);
                 CloseLibrary();
                 Screen = AppScreen.NoDevice;
                 ShowBanner(null);
@@ -592,6 +614,7 @@ public sealed partial class MainViewModel : ObservableObject
             _ => "Foto e video",
         };
         IsSettingsOpen = false;
+        IsStorageOpen = false;
         OnPropertyChanged(nameof(ActiveNav));
         BuildRows();
     }
@@ -601,7 +624,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         if (Enum.TryParse<LibraryFilter>(name, out var f))
         {
-            if (f == Filter) { IsSettingsOpen = false; return; }
+            if (f == Filter) { IsSettingsOpen = false; IsStorageOpen = false; return; }
             Filter = f;
         }
     }
@@ -1332,6 +1355,124 @@ public sealed partial class MainViewModel : ObservableObject
         Shell.Open(_resultFolder ?? Settings.DestinationRoot);
     }
 
+    // ================================================================== iOS 26+: collegamento chiuso col telefono bloccato
+
+    private DateTime? _lastDropAt;
+    private readonly List<DateTime> _drops = [];
+
+    /// <summary>
+    /// Il telefono aperto è sparito. Da iOS 26 succede ogni volta che lo schermo si blocca ("Accessori cablati",
+    /// di base "consenti se sbloccato"): il 15/10 l'iPhone con iOS 27 è caduto 5 volte in 4 minuti. Si annota
+    /// e la schermata dice "Sblocca l'iPhone" con il modo di evitarlo, invece di "Collega l'iPhone".
+    /// </summary>
+    private void NoteDrop(DeviceInfo dev)
+    {
+        var now = DateTime.UtcNow;
+        _drops.RemoveAll(t => now - t > TimeSpan.FromMinutes(10));
+        _drops.Add(now);
+        _lastDropAt = IosMajor(dev.Firmware) >= 26 ? now : null;
+        _log.Info($"iPhone scollegato (iOS {dev.Firmware}; {_drops.Count} volte negli ultimi 10 minuti)");
+        if (_drops.Count >= 3) ReportProblem("iPhone che si scollega spesso");
+    }
+
+    internal static int IosMajor(string firmware) =>
+        int.TryParse(firmware.Split('.')[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : 0;
+
+    /// <summary>Caduto da poco un iPhone con iOS 26 o successivo: quasi sempre è lo schermo che si è bloccato.</summary>
+    public bool ShowDropHint => _lastDropAt is { } t && DateTime.UtcNow - t < TimeSpan.FromMinutes(15);
+
+    public string NoDeviceTitle => ShowDropHint ? "Sblocca l'iPhone" : "Collega l'iPhone con il cavo USB";
+
+    public string NoDeviceText => ShowDropHint
+        ? "L'iPhone ha chiuso il collegamento, quasi sempre perché lo schermo si è bloccato: da iOS 26 passa i dati al PC solo da sbloccato. Sbloccalo (se serve stacca e riattacca il cavo): la libreria torna da sola."
+        : "La libreria compare da sola appena il telefono è pronto.";
+
+    // ================================================================== spazio sull'iPhone
+
+    [ObservableProperty] private bool _storageLoading;
+    [ObservableProperty] private string? _storageError;
+    [ObservableProperty] private StorageBreakdown? _breakdown;
+    public ObservableCollection<StorageSliceRow> StorageSlices { get; } = [];
+    public ObservableCollection<AppRow> StorageApps { get; } = [];
+    private string? _breakdownFor;
+    private DateTime _breakdownAt;
+    private CancellationTokenSource? _storageCts;
+
+    public string StorageSummary => Breakdown is { } b
+        ? $"{TransferEngine.Format(b.Used)} usati di {TransferEngine.Format(b.Capacity)} · {TransferEngine.Format(b.Free)} liberi" : "";
+    public string StorageAppsTitle => Breakdown is { } b
+        ? $"App installate ({b.Apps.Count.ToString("N0", It)}) · {TransferEngine.Format(b.Apps.Sum(a => a.Total))}" : "App installate";
+    public string? StorageNotes => Breakdown is { Notes.Count: > 0 } b ? string.Join(" · ", b.Notes) : null;
+    public bool HasStorageNotes => StorageNotes is not null;
+
+    partial void OnBreakdownChanged(StorageBreakdown? value)
+    {
+        StorageSlices.Clear();
+        StorageApps.Clear();
+        if (value is not null)
+        {
+            foreach (var slice in value.Slices) StorageSlices.Add(new StorageSliceRow(slice, value.Capacity));
+            long max = value.Apps.Count > 0 ? Math.Max(1, value.Apps.Max(a => a.Total)) : 1;
+            foreach (var app in value.Apps) StorageApps.Add(new AppRow(app, (double)app.Total / max));
+        }
+        OnPropertyChanged(nameof(StorageSummary));
+        OnPropertyChanged(nameof(StorageAppsTitle));
+        OnPropertyChanged(nameof(StorageNotes));
+        OnPropertyChanged(nameof(HasStorageNotes));
+    }
+
+    [RelayCommand]
+    private async Task OpenStorage()
+    {
+        IsStorageOpen = true;
+        // Già letto da poco per questo telefono: si mostra subito (Aggiorna rilegge).
+        if (Breakdown is not null && _breakdownFor == Device?.Key && DateTime.UtcNow - _breakdownAt < TimeSpan.FromMinutes(5)) return;
+        await RefreshStorage();
+    }
+
+    [RelayCommand]
+    private async Task RefreshStorage()
+    {
+        if (Device is not { } dev || StorageLoading) return;
+        StorageLoading = true;
+        StorageError = null;
+        _storageCts?.Dispose();
+        _storageCts = new CancellationTokenSource(TimeSpan.FromMinutes(4));
+        var ct = _storageCts.Token;
+        // Collegamento a parte, come per la copia: contare migliaia di file non deve fermare le miniature.
+        IDeviceConnection conn = _demo ? _browse! : new WorkerConnection(new ProcessWorkerLauncher(Environment.ProcessPath!), log: _log.Info);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var opened = await conn.OpenAsync(dev.Id, ct);
+            if (!opened.Ready) throw new DeviceException("L'iPhone è bloccato: sbloccalo e premi Aggiorna", DeviceErrors.NotReady);
+            var result = await conn.GetStorageAsync(ct);
+            if (result is null) { StorageError = "Questo collegamento non dice come è usata la memoria."; return; }
+            Breakdown = result;
+            _breakdownFor = dev.Key;
+            _breakdownAt = DateTime.UtcNow;
+            _log.Info($"Memoria letta in {clock.Elapsed.TotalSeconds:0.0} s: " + string.Join(", ",
+                result.Slices.Select(x => $"{x.Name} {TransferEngine.Format(x.Bytes)}")) + $"; {result.Apps.Count} app"
+                + (result.Notes.Count > 0 ? " | " + string.Join(" | ", result.Notes) : ""));
+        }
+        catch (OperationCanceledException)
+        {
+            StorageError = "Il telefono ci mette troppo a rispondere. Sbloccalo e premi Aggiorna.";
+        }
+        catch (DeviceException e)
+        {
+            _log.Warn("Memoria dell'iPhone: " + e.Message);
+            StorageError = e.Kind == DeviceErrorKind.Gone ? "L'iPhone non è più collegato."
+                : e.Code == DeviceErrors.NotReady ? "L'iPhone è bloccato: sbloccalo e premi Aggiorna."
+                : "Il telefono non ha risposto. Sbloccalo e premi Aggiorna.";
+        }
+        finally
+        {
+            if (!_demo) await conn.DisposeAsync();
+            StorageLoading = false;
+        }
+    }
+
     // ================================================================== impostazioni
 
     [RelayCommand]
@@ -1398,6 +1539,10 @@ public sealed partial class MainViewModel : ObservableObject
         Line("Ultimo rapporto", _reporter.LastResult + (ProblemReporter.PendingCount is > 0 and var queued ? $" · {queued} in coda" : ""));
         Line("Aggiornamenti", UpdateStatus.Length > 0 ? UpdateStatus : "non ancora controllati");
         if (_lastEnumeration is not null) Line("Ultimo elenco", _lastEnumeration);
+        if (_drops.Count > 0) Line("Scollegamenti", $"{_drops.Count} negli ultimi 10 minuti");
+        if (Breakdown is { } mem)
+            Line("Memoria", string.Join(", ", mem.Slices.Select(x => $"{x.Name} {TransferEngine.Format(x.Bytes)}")) + $"; {mem.Apps.Count} app"
+                + (mem.Notes.Count > 0 ? " | " + string.Join(" | ", mem.Notes) : ""));
         if (Device is not null)
         {
             Line("Elementi / file", $"{_items.Count} / {_files.Count}");
@@ -1637,5 +1782,11 @@ public sealed partial class MainViewModel : ObservableObject
     {
         CloseLibrary();
         Screen = AppScreen.NoDevice;
+    }
+
+    internal void DemoShowDrop()
+    {
+        _lastDropAt = DateTime.UtcNow;
+        RaiseScreen();
     }
 }

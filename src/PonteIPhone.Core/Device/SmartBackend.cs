@@ -73,6 +73,8 @@ public sealed class SmartBackend : IDeviceBackend
 
     public byte[]? GetThumbnail(string objectId) => _apple.GetThumbnail(objectId);
 
+    public StorageBreakdown? GetStorage(CancellationToken ct) => _apple.GetStorage(ct);
+
     public DownloadResult Download(string objectId, string destination, Action<long> progress, CancellationToken ct) =>
         _apple.Download(objectId, destination, progress, ct);
 

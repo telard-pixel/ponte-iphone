@@ -177,6 +177,7 @@ public sealed partial class AppleBackend : IDeviceBackend
             _afc = ConnectAfc(dev.DeviceId, service, pair);
             _openedPair = pair;
             _openedMuxId = dev.DeviceId;
+            WatchDetach();
         }
         catch (Exception e) when (e is IOException or EndOfStreamException or FormatException or System.Xml.XmlException)
         {
@@ -234,6 +235,145 @@ public sealed partial class AppleBackend : IDeviceBackend
 
     private bool _afcEncrypted;
 
+    private IDisposable? _listener;
+    private int _listenerFor = -1;
+
+    /// <summary>
+    /// Appena il servizio Apple dice che il telefono aperto è sparito, chiude il canale AFC: la lettura in corso
+    /// fallisce subito ("scollegato") invece di aspettare 25 secondi. Se l'ascolto non parte si va avanti senza.
+    /// </summary>
+    private void WatchDetach()
+    {
+        if (_listener is not null && _listenerFor == _openedMuxId) return;
+        _listener?.Dispose();
+        _listener = null;
+        int watched = _openedMuxId;
+        try
+        {
+            _listener = _mux.Listen((type, id) =>
+            {
+                if (type != "Detached" || id != watched) return;
+                var afc = _afc;
+                try { afc?.Dispose(); } catch (Exception e) when (e is IOException or ObjectDisposedException) { }
+            });
+            _listenerFor = watched;
+        }
+        catch (UsbmuxException) { }
+    }
+
+    /// <summary>Sessione cifrata nuova con il telefono aperto (per le richieste occasionali: blocco, memoria, app).</summary>
+    private LockdownClient Session(PairRecord pair)
+    {
+        var lockdown = new LockdownClient(_mux.Connect(_openedMuxId, LockdownClient.Port));
+        try
+        {
+            lockdown.StartSession(pair);
+            return lockdown;
+        }
+        catch
+        {
+            lockdown.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>Quanto tempo dedicare al massimo alla libreria di Foto (miniature, copie ridotte di iCloud): può avere centinaia di migliaia di file.</summary>
+    public static TimeSpan PhotoLibraryBudget { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Come è suddivisa la memoria, come in iTunes. Totale e libero dal dominio "com.apple.disk_usage" di lockdown,
+    /// le app da installation_proxy (programma + dati), foto/musica/libri sommando i file con AFC. Quello che il
+    /// telefono non dice per categoria finisce in "Altro".
+    /// </summary>
+    public StorageBreakdown GetStorage(CancellationToken ct)
+    {
+        if (_openedPair is not { } pair) throw new DeviceException("iPhone non aperto", DeviceErrors.WpdDeviceNotOpen);
+        var notes = new List<string>();
+        long capacity = 0, free = 0, system = 0;
+        var apps = new List<AppUsage>();
+        try
+        {
+            using var lockdown = Session(pair);
+            var disk = SafeValues(lockdown, "com.apple.disk_usage");
+            capacity = disk.GetLong("TotalDiskCapacity") ?? 0;
+            long data = disk.GetLong("TotalDataCapacity") ?? 0;
+            free = disk.GetLong("TotalDataAvailable") ?? disk.GetLong("AmountDataAvailable") ?? 0;
+            system = capacity > data && data > 0 ? capacity - data : disk.GetLong("TotalSystemCapacity") ?? 0;
+            if (capacity == 0) notes.Add("Il telefono non dice la capacità (com.apple.disk_usage vuoto)");
+
+            try
+            {
+                (int Port, bool Ssl) service;
+                try { service = lockdown.StartService(InstallationProxy.Service); }
+                catch (LockdownException) when (pair.EscrowBag is not null) { service = lockdown.StartService(InstallationProxy.Service, pair.EscrowBag); }
+                var (stream, owner) = ConnectService(_openedMuxId, service, pair);
+                try { apps = InstallationProxy.BrowseUserApps(stream, ct); }
+                finally { if (owner is null) stream.Dispose(); else owner.Dispose(); }
+                if (apps.Count > 0 && apps.All(a => a.DataBytes == 0)) notes.Add("Il telefono non dice quanto occupano i dati delle app (finiscono in Altro)");
+            }
+            catch (LockdownException e)
+            {
+                notes.Add("Elenco delle app non disponibile: " + e.Error);
+            }
+        }
+        catch (Exception e) when (e is IOException or EndOfStreamException or FormatException or System.Xml.XmlException or UsbmuxException)
+        {
+            throw new DeviceException("Il telefono non risponde (memoria): " + e.Message, DeviceErrors.GenFailure, e);
+        }
+        catch (LockdownException e)
+        {
+            throw new DeviceException("Il telefono non dà i dati della memoria: " + e.Message, DeviceErrors.NotReady, e);
+        }
+
+        return Guard(() =>
+        {
+            if (capacity == 0)
+            {
+                // Riserva: la sola partizione dei dati vista da AFC (senza iOS).
+                var di = Afc.GetDeviceInfo();
+                capacity = long.TryParse(di.GetValueOrDefault("FSTotalBytes"), out var t) ? t : 0;
+                free = long.TryParse(di.GetValueOrDefault("FSFreeBytes"), out var f) ? f : 0;
+            }
+            long photos = SumSizes(Dcim, null, ct, out _);
+            var library = SumSizes("/PhotoData", PhotoLibraryBudget, ct, out bool complete);
+            if (complete) photos += library;
+            else notes.Add("Libreria di Foto troppo grande per contarla tutta: miniature e copie di iCloud sono in Altro");
+            long music = SumSizes("/iTunes_Control/Music", TimeSpan.FromSeconds(20), ct, out _);
+            long books = SumSizes("/Books", TimeSpan.FromSeconds(10), ct, out _);
+            return StorageBreakdown.Build(capacity, free, system, apps, photos, music, books, notes);
+        });
+    }
+
+    /// <summary>Somma delle dimensioni dei file sotto <paramref name="root"/> (0 se non c'è); si ferma allo scadere di <paramref name="budget"/>.</summary>
+    private long SumSizes(string root, TimeSpan? budget, CancellationToken ct, out bool complete)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        long total = 0;
+        var pending = new Stack<string>();
+        pending.Push(root);
+        complete = true;
+        while (pending.Count > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (budget is { } b && clock.Elapsed > b) { complete = false; break; }
+            var dir = pending.Pop();
+            List<string> names;
+            try { names = Afc.ReadDirectory(dir); }
+            catch (AfcException) { continue; } // cartella che non c'è o non leggibile
+            foreach (var name in names)
+            {
+                if (name is "." or "..") continue;
+                var full = dir + "/" + name;
+                Dictionary<string, string> st;
+                try { st = Afc.GetFileInfo(full); }
+                catch (AfcException) { continue; }
+                if (st.GetValueOrDefault("st_ifmt") == "S_IFDIR") pending.Push(full);
+                else if (long.TryParse(st.GetValueOrDefault("st_size"), out var size) && size > 0) total += size;
+            }
+        }
+        return total;
+    }
+
     /// <summary>
     /// True se l'iPhone aperto è bloccato adesso, null se non si riesce a saperlo. AFC si apre anche da bloccato
     /// (escrow bag), WPD no: per cancellare serve saperlo. Si chiede ad AFC senza escrow bag, come al primo tentativo
@@ -244,8 +384,7 @@ public sealed partial class AppleBackend : IDeviceBackend
         if (_openedPair is not { } pair) return null;
         try
         {
-            using var lockdown = new LockdownClient(_mux.Connect(_openedMuxId, LockdownClient.Port));
-            lockdown.StartSession(pair);
+            using var lockdown = Session(pair);
             lockdown.StartService(AfcClient.Service);
             return false;
         }
@@ -260,9 +399,9 @@ public sealed partial class AppleBackend : IDeviceBackend
         }
     }
 
-    private static Dictionary<string, object> SafeValues(LockdownClient lockdown)
+    private static Dictionary<string, object> SafeValues(LockdownClient lockdown, string? domain = null)
     {
-        try { return lockdown.GetValues(); }
+        try { return lockdown.GetValues(domain: domain); }
         catch (LockdownException) { return new Dictionary<string, object>(); }
     }
 
@@ -357,14 +496,21 @@ public sealed partial class AppleBackend : IDeviceBackend
     private AfcClient ConnectAfc(int deviceId, (int Port, bool Ssl) service, PairRecord pair)
     {
         _afcEncrypted = service.Ssl;
+        var (stream, owner) = ConnectService(deviceId, service, pair);
+        return new AfcClient(stream, owner);
+    }
+
+    /// <summary>Canale verso un servizio del telefono, cifrato se il telefono lo chiede. Owner chiude tutto.</summary>
+    private (Stream Stream, IDisposable? Owner) ConnectService(int deviceId, (int Port, bool Ssl) service, PairRecord pair)
+    {
         var raw = _mux.Connect(deviceId, service.Port);
         UsbmuxClient.SetTimeout(raw, UsbmuxClient.DataTimeout);
-        if (!service.Ssl) return new AfcClient(raw);
+        if (!service.Ssl) return (raw, null);
         try
         {
             var cert = pair.ClientCertificate();
             SslStream ssl = LockdownClient.StartTls(raw, cert);
-            return new AfcClient(ssl, new Disposables(raw, cert));
+            return (ssl, new Disposables(raw, cert));
         }
         catch
         {
@@ -676,5 +822,9 @@ public sealed partial class AppleBackend : IDeviceBackend
         _afc = null;
     }
 
-    public void Dispose() => CloseAfc();
+    public void Dispose()
+    {
+        _listener?.Dispose();
+        CloseAfc();
+    }
 }

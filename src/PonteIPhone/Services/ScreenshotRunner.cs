@@ -67,6 +67,11 @@ public static class ScreenshotRunner
                 Save(window, Path.Combine(folder, "6-impostazioni.png"));
                 vm.CloseSettingsCommand.Execute(null);
 
+                await vm.OpenStorageCommand.ExecuteAsync(null);
+                await Settle(800);
+                Save(window, Path.Combine(folder, "6b-spazio.png"));
+                vm.SetFilterCommand.Execute("All");
+
                 // Copia vera sul telefono finto, fino in fondo: prova anche il motore dentro l'app.
                 vm.Settings.DestinationRoot = Path.Combine(Path.GetTempPath(), "PonteIPhone-demo-copie");
                 vm.Settings.ConfirmMove = false;
@@ -81,6 +86,10 @@ public static class ScreenshotRunner
                 vm.DemoShowNoDevice();
                 await Settle(600);
                 Save(window, Path.Combine(folder, "9-nessun-iphone.png"));
+
+                vm.DemoShowDrop();
+                await Settle(600);
+                Save(window, Path.Combine(folder, "9b-iphone-bloccato-ios26.png"));
 
                 // Di nuovo la libreria per la versione scura.
                 await vm.ReloadCommand.ExecuteAsync(null);

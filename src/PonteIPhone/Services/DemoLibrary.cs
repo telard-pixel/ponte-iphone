@@ -21,6 +21,19 @@ public static class DemoLibrary
             Storage = new StorageInfo("Internal Storage", 128_000_000_000, 30_400_000_000),
             BytesPerSecond = 38L * 1024 * 1024,
         };
+        const long G = 1_000_000_000, M = 1_000_000;
+        fake.Breakdown = StorageBreakdown.Build(128 * G, 30_400 * M, 11_200 * M,
+        [
+            new AppUsage("WhatsApp", "net.whatsapp.WhatsApp", 310 * M, 14_800 * M),
+            new AppUsage("Instagram", "com.burbn.instagram", 480 * M, 3_900 * M),
+            new AppUsage("Spotify", "com.spotify.client", 210 * M, 4_100 * M),
+            new AppUsage("Google Maps", "com.google.Maps", 390 * M, 1_250 * M),
+            new AppUsage("TikTok", "com.zhiliaoapp.musically", 560 * M, 2_300 * M),
+            new AppUsage("Netflix", "com.netflix.Netflix", 120 * M, 2_900 * M),
+            new AppUsage("Telegram", "ph.telegra.Telegraph", 180 * M, 1_700 * M),
+            new AppUsage("Amazon", "com.amazon.Amazon", 260 * M, 410 * M),
+            new AppUsage("Satispay", "com.satispay.satispay", 140 * M, 95 * M),
+        ], photos: 38_600 * M, music: 2_100 * M, books: 350 * M, notes: []);
         var rnd = new Random(7);
         // Foto con contenuto vero (JPEG grande), così anche l'anteprima e il pannello dettagli si vedono.
         var photos = new Dictionary<string, (int Seed, int Scene)>();

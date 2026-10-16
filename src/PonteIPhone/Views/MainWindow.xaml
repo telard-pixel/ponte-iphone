@@ -3,6 +3,7 @@
                  xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                  xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
                  xmlns:vm="clr-namespace:PonteIPhone.ViewModels"
+                 xmlns:views="clr-namespace:PonteIPhone.Views"
                  Title="Ponte iPhone"
                  Width="1260" Height="820" MinWidth="860" MinHeight="580"
                  WindowStartupLocation="CenterScreen"
@@ -194,6 +195,8 @@
                     <StackPanel DockPanel.Dock="Top" Margin="4,12,4,0" Visibility="{Binding HasStorage, Converter={StaticResource BoolToVis}}">
                         <TextBlock Text="{Binding StorageText}" Style="{StaticResource Caption}" Margin="0,0,0,5" />
                         <ProgressBar Height="5" Minimum="0" Maximum="1" Value="{Binding StorageFraction, Mode=OneWay}" />
+                        <Button Style="{StaticResource LinkButton}" Content="Come è usata la memoria" Margin="-4,4,0,0" HorizontalAlignment="Left"
+                                Command="{Binding OpenStorageCommand}" Visibility="{Binding HasDevice, Converter={StaticResource BoolToVis}}" />
                     </StackPanel>
 
                     <!-- in fondo -->
@@ -221,6 +224,15 @@
                                     <TextBlock Style="{StaticResource Icon}" Text="&#xE710;" Margin="0,0,10,0" />
                                     <TextBlock Text="Da copiare" />
                                 </DockPanel>
+                            </RadioButton>
+
+                            <TextBlock Text="IPHONE" Style="{StaticResource SectionLabel}" Margin="10,16,0,4" />
+                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding OpenStorageCommand}"
+                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=Storage}">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xEDA2;" Margin="0,0,10,0" />
+                                    <TextBlock Text="Spazio" />
+                                </StackPanel>
                             </RadioButton>
                         </StackPanel>
 
@@ -305,8 +317,16 @@
             <!-- ························ centro: nessun iPhone ························ -->
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto" Visibility="{Binding ShowNoDevice, Converter={StaticResource BoolToVis}}">
                 <StackPanel MaxWidth="500" Margin="32" VerticalAlignment="Center" HorizontalAlignment="Center">
-                    <TextBlock Text="Collega l'iPhone con il cavo USB" FontSize="26" FontWeight="SemiBold" TextWrapping="Wrap" />
-                    <TextBlock Text="La libreria compare da sola appena il telefono è pronto." Style="{StaticResource Caption}" FontSize="13" Margin="0,6,0,22" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding NoDeviceTitle}" FontSize="26" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock Text="{Binding NoDeviceText}" Style="{StaticResource Caption}" FontSize="13" Margin="0,6,0,22" TextWrapping="Wrap" />
+                    <Border Background="{DynamicResource SystemFillColorCautionBackgroundBrush}" CornerRadius="6" Padding="14,10" Margin="0,0,0,22"
+                            Visibility="{Binding ShowDropHint, Converter={StaticResource BoolToVis}}">
+                        <StackPanel>
+                            <TextBlock FontWeight="SemiBold" TextWrapping="Wrap" Text="Per non doverlo sbloccare ogni volta" />
+                            <TextBlock TextWrapping="Wrap" FontSize="12.5" Margin="0,4,0,0"
+                                       Text="Sull'iPhone: Impostazioni › Privacy e sicurezza › (sezione Sicurezza) › Accessori cablati › “Consenti sempre”. Puoi rimetterlo com'era dopo la copia. In alternativa, durante la copia: Schermo e luminosità › Blocco automatico › Mai." />
+                        </StackPanel>
+                    </Border>
 
                     <Grid Margin="0,0,0,14">
                         <Grid.ColumnDefinitions>
@@ -418,6 +438,109 @@
                 <TextBlock Style="{StaticResource Caption}" TextAlignment="Center" Margin="0,10,0,0"
                            Text="Il rapporto dice cosa vede l'app nel telefono e arriva da solo a chi ti segue con l'app." />
             </StackPanel>
+
+            <!-- ························ centro: spazio sull'iPhone ························ -->
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"
+                          Visibility="{Binding IsStorageOpen, Converter={StaticResource BoolToVis}}">
+                <StackPanel Margin="24,14,24,24" MaxWidth="820">
+                    <DockPanel Margin="0,0,0,4">
+                        <ui:Button DockPanel.Dock="Right" Content="Aggiorna" VerticalAlignment="Center" Command="{Binding RefreshStorageCommand}" />
+                        <TextBlock Text="Spazio sull'iPhone" Style="{StaticResource PageTitle}" />
+                    </DockPanel>
+                    <TextBlock Text="{Binding StorageSummary}" Style="{StaticResource Caption}" FontSize="13" Margin="0,0,0,14" />
+
+                    <StackPanel Orientation="Horizontal" Margin="0,30,0,0" HorizontalAlignment="Center"
+                                Visibility="{Binding StorageLoading, Converter={StaticResource BoolToVis}}">
+                        <ui:ProgressRing IsIndeterminate="True" Width="22" Height="22" Margin="0,0,12,0" />
+                        <TextBlock VerticalAlignment="Center" Text="Leggo la memoria dell'iPhone (app, foto, musica)… può volerci fino a un minuto." />
+                    </StackPanel>
+                    <Border Background="{DynamicResource SystemFillColorCautionBackgroundBrush}" CornerRadius="6" Padding="14,10" Margin="0,8,0,8"
+                            Visibility="{Binding StorageError, Converter={StaticResource NotNullToVis}}">
+                        <TextBlock TextWrapping="Wrap" Text="{Binding StorageError}" />
+                    </Border>
+
+                    <!-- barra come iTunes -->
+                    <Border CornerRadius="4" ClipToBounds="True" Height="26" BorderThickness="1" Padding="1"
+                            BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                            Visibility="{Binding Breakdown, Converter={StaticResource NotNullToVis}}">
+                        <ItemsControl ItemsSource="{Binding StorageSlices}">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <views:ProportionalPanel />
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemContainerStyle>
+                                <Style TargetType="ContentPresenter">
+                                    <Setter Property="views:ProportionalPanel.Weight" Value="{Binding Weight}" />
+                                </Style>
+                            </ItemsControl.ItemContainerStyle>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="{Binding Fill}" ToolTip="{Binding Tooltip}" BorderThickness="0,0,1,0"
+                                            BorderBrush="{DynamicResource ApplicationBackgroundBrush}" />
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+
+                    <!-- legenda -->
+                    <ItemsControl ItemsSource="{Binding StorageSlices}" Margin="0,12,0,0"
+                                  Visibility="{Binding Breakdown, Converter={StaticResource NotNullToVis}}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal" Margin="0,0,22,8">
+                                    <Border Width="11" Height="11" CornerRadius="3" Background="{Binding Fill}" VerticalAlignment="Center" Margin="0,0,7,0"
+                                            BorderThickness="1" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" />
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                        <TextBlock Style="{StaticResource Caption}">
+                                            <Run Text="{Binding Size, Mode=OneWay}" /><Run Text=" · " /><Run Text="{Binding Percent, Mode=OneWay}" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </StackPanel>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,0"
+                               Visibility="{Binding Breakdown, Converter={StaticResource NotNullToVis}}"
+                               Text="“Altro” è ciò che l'iPhone non attribuisce a una voce: libreria di Foto (miniature e copie ridotte di iCloud), cache, Messaggi, dati di sistema." />
+                    <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,4,0,0" Text="{Binding StorageNotes}"
+                               Visibility="{Binding HasStorageNotes, Converter={StaticResource BoolToVis}}" />
+
+                    <!-- app -->
+                    <TextBlock Text="{Binding StorageAppsTitle}" FontWeight="SemiBold" Margin="0,22,0,8"
+                               Visibility="{Binding Breakdown, Converter={StaticResource NotNullToVis}}" />
+                    <ItemsControl ItemsSource="{Binding StorageApps}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{StaticResource SettingCard}" Margin="0,0,0,4" Padding="12,8">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Width="32" Height="32" CornerRadius="8" Background="{DynamicResource ControlFillColorSecondaryBrush}" Margin="0,0,12,0">
+                                            <TextBlock Text="{Binding Initial}" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+                                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding Detail}" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" />
+                                            <ProgressBar Height="3" Minimum="0" Maximum="1" Value="{Binding Fraction, Mode=OneWay}" Margin="0,5,0,0" MaxWidth="360" HorizontalAlignment="Left" Width="360" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="2" Text="{Binding Total}" FontWeight="SemiBold" VerticalAlignment="Center" Margin="12,0,0,0" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </StackPanel>
+            </ScrollViewer>
 
             <!-- ························ centro: impostazioni ························ -->
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"

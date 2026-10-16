@@ -54,6 +54,15 @@ public sealed class FakeBackend : IDeviceBackend
     public CancellationToken HangRelease { get; set; } = CancellationToken.None;
     private bool _open;
 
+    /// <summary>Suddivisione della memoria da restituire (null = il collegamento non la sa dire).</summary>
+    public StorageBreakdown? Breakdown { get; set; }
+
+    public StorageBreakdown? GetStorage(CancellationToken ct)
+    {
+        EnsureReady();
+        return Breakdown;
+    }
+
     public IReadOnlyList<DeviceInfo> ListDevices() => Unplugged ? [] : [Device];
 
     public OpenResult Open(string deviceId)

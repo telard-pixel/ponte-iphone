@@ -36,6 +36,9 @@ public interface IDeviceBackend : IDisposable
 
     /// <summary>Cancella dal telefono, un file alla volta: l'esito di ognuno è nel risultato, non in un'eccezione.</summary>
     IReadOnlyList<DeleteResult> Delete(IReadOnlyList<string> objectIds);
+
+    /// <summary>Come è suddivisa la memoria (app, foto, musica…), o null se questo collegamento non lo sa dire.</summary>
+    StorageBreakdown? GetStorage(CancellationToken ct) => null;
 }
 
 /// <summary>Il telefono visto dall'app: tutto asincrono, mai bloccante per l'interfaccia.</summary>
@@ -47,6 +50,7 @@ public interface IDeviceConnection : IAsyncDisposable
     Task<byte[]?> GetThumbnailAsync(string objectId, CancellationToken ct);
     Task<DownloadResult> DownloadAsync(string objectId, string destination, Action<long>? progress, CancellationToken ct);
     Task<IReadOnlyList<DeleteResult>> DeleteAsync(IReadOnlyList<string> objectIds, CancellationToken ct);
+    Task<StorageBreakdown?> GetStorageAsync(CancellationToken ct);
 }
 
 /// <summary>Com'è andato un elenco: file consegnati e foto rimaste solo su iCloud (vedi <see cref="IDeviceBackend.CloudOnlyFiles"/>).</summary>

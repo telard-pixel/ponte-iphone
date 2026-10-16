@@ -20,6 +20,19 @@ public sealed class FakeAppleDevice : IDisposable
     private const int DeviceId = 7;
     private const int WifiDeviceId = 8;
     private const int AfcPort = 49152;
+    private const int AppsPort = 49153;
+
+    /// <summary>App installate (nome, bundle, byte del programma, byte dei dati) per installation_proxy.</summary>
+    public List<(string Name, string Id, long App, long Data)> Apps { get; } =
+    [
+        ("WhatsApp", "net.whatsapp.WhatsApp", 300_000_000, 9_000_000_000),
+        ("Maps", "com.google.Maps", 400_000_000, 1_000_000_000),
+        ("Calcolatrice X", "com.example.calc", 20_000_000, 0),
+    ];
+    public long DiskCapacity { get; set; } = 128_000_000_000;
+    public long DataCapacity { get; set; } = 116_000_000_000;
+    public long DataAvailable { get; set; } = 40_000_000_000;
+    private readonly List<Stream> _listeners = [];
 
     private readonly TcpListener _listener = new(IPAddress.Loopback, 0);
     private readonly CancellationTokenSource _stop = new();
@@ -147,7 +160,7 @@ public sealed class FakeAppleDevice : IDisposable
                 int port = ((raw & 0xFF) << 8) | ((raw >> 8) & 0xFF);
                 var id = msg.GetLong("DeviceID");
                 if (id == WifiDeviceId) Interlocked.Increment(ref WifiConnections);
-                bool ok = ((id == DeviceId && Usb) || (id == WifiDeviceId && Wifi)) && port is LockdownClient.Port or AfcPort;
+                bool ok = ((id == DeviceId && Usb) || (id == WifiDeviceId && Wifi)) && port is LockdownClient.Port or AfcPort or AppsPort;
                 MuxReply(s, tag, new Dictionary<string, object> { ["MessageType"] = "Result", ["Number"] = ok ? 0L : 3L });
                 if (!ok) return;
                 if (port == LockdownClient.Port)
@@ -156,9 +169,15 @@ public sealed class FakeAppleDevice : IDisposable
                     if (HangLockdown) { _stop.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(30)); return; }
                     ServeLockdown(s);
                 }
+                else if (port == AppsPort) ServeApps(s);
                 else ServeAfc(s);
                 break;
             }
+            case "Listen":
+                lock (_listeners) _listeners.Add(s); // prima della risposta: un Unplug subito dopo non va perso
+                MuxReply(s, tag, new Dictionary<string, object> { ["MessageType"] = "Result", ["Number"] = 0L });
+                _stop.Token.WaitHandle.WaitOne(); // resta aperto: gli eventi arrivano da Unplug()
+                break;
         }
     }
 
@@ -229,6 +248,12 @@ public sealed class FakeAppleDevice : IDisposable
                     }
                     break;
                 }
+                case "GetValue" when msg.GetString("Domain") == "com.apple.disk_usage":
+                    reply["Value"] = new Dictionary<string, object>
+                    {
+                        ["TotalDiskCapacity"] = DiskCapacity, ["TotalDataCapacity"] = DataCapacity, ["TotalDataAvailable"] = DataAvailable,
+                    };
+                    break;
                 case "GetValue":
                     reply["Value"] = new Dictionary<string, object>
                     {
@@ -237,7 +262,11 @@ public sealed class FakeAppleDevice : IDisposable
                     break;
                 case "StartService":
                     if (Locked && msg.GetData("EscrowBag") is null) reply["Error"] = "PasswordProtected";
-                    else { reply["Port"] = (long)AfcPort; reply["EnableServiceSSL"] = false; }
+                    else
+                    {
+                        reply["Port"] = (long)(msg.GetString("Service") == InstallationProxy.Service ? AppsPort : AfcPort);
+                        reply["EnableServiceSSL"] = false;
+                    }
                     break;
                 case "StopSession": break;
                 default: reply["Error"] = "UnknownRequest"; break;
@@ -261,6 +290,38 @@ public sealed class FakeAppleDevice : IDisposable
                 });
                 if (ssl.RemoteCertificate is not null) Interlocked.Increment(ref SessionsWithClientCert);
                 s = ssl;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ installation_proxy
+
+    private void ServeApps(Stream s)
+    {
+        var req = InstallationProxy.Read(s);
+        Assert.Equal("Browse", req.GetString("Command"));
+        // Come il telefono vero: l'elenco arriva a pezzi, poi "Complete".
+        foreach (var chunk in Apps.Chunk(2))
+        {
+            var list = chunk.Select(a => (object)new Dictionary<string, object>
+            {
+                ["CFBundleIdentifier"] = a.Id, ["CFBundleDisplayName"] = a.Name, ["StaticDiskUsage"] = a.App, ["DynamicDiskUsage"] = a.Data,
+            }).ToList();
+            InstallationProxy.Write(s, new Dictionary<string, object> { ["Status"] = "BrowsingApplications", ["CurrentList"] = list });
+        }
+        InstallationProxy.Write(s, new Dictionary<string, object> { ["Status"] = "Complete" });
+    }
+
+    /// <summary>Il cavo si stacca (o l'iPhone con iOS 26 si blocca): sparisce dall'elenco e chi ascolta riceve "Detached".</summary>
+    public void Unplug()
+    {
+        Usb = false;
+        lock (_listeners)
+        {
+            foreach (var l in _listeners)
+            {
+                try { MuxReply(l, 0, new Dictionary<string, object> { ["MessageType"] = "Detached", ["DeviceID"] = (long)DeviceId }); }
+                catch (Exception e) when (e is IOException or ObjectDisposedException) { }
             }
         }
     }

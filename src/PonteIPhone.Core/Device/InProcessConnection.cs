@@ -72,6 +72,8 @@ public sealed class InProcessConnection : IDeviceConnection
     public Task<IReadOnlyList<DeleteResult>> DeleteAsync(IReadOnlyList<string> objectIds, CancellationToken ct) =>
         Run(b => b.Delete(objectIds), ct);
 
+    public Task<StorageBreakdown?> GetStorageAsync(CancellationToken ct) => Run(b => b.GetStorage(ct), ct);
+
     public ValueTask DisposeAsync()
     {
         if (_disposed) return ValueTask.CompletedTask;

@@ -152,6 +152,55 @@ public sealed class UsbmuxClient
         }
     }
 
+    /// <summary>
+    /// Resta in ascolto degli iPhone che si collegano e scollegano ("Attached"/"Detached" con il DeviceID).
+    /// Serve ad accorgersi subito che il telefono è sparito: da iOS 26 l'iPhone chiude i dati appena si blocca
+    /// ("Accessori cablati") e una lettura in corso altrimenti aspetterebbe 25 secondi prima di arrendersi.
+    /// Chiudere il valore restituito ferma l'ascolto.
+    /// </summary>
+    public IDisposable Listen(Action<string, int> onEvent)
+    {
+        var s = Open();
+        try
+        {
+            var reply = Exchange(s, Base("Listen"));
+            if ((reply.GetLong("Number") ?? -1) != 0) throw new UsbmuxException("il servizio Apple rifiuta l'ascolto");
+            if (s.CanTimeout) s.ReadTimeout = Timeout.Infinite;
+        }
+        catch
+        {
+            s.Dispose();
+            throw;
+        }
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                while (true)
+                {
+                    var msg = ReadMessage(s);
+                    var id = msg.GetLong("DeviceID") ?? msg.GetDict("Properties")?.GetLong("DeviceID") ?? -1;
+                    onEvent(msg.GetString("MessageType") ?? "", (int)id);
+                }
+            }
+            catch (Exception e) when (e is IOException or EndOfStreamException or ObjectDisposedException or FormatException
+                                          or System.Xml.XmlException or UsbmuxException) { }
+        }) { IsBackground = true, Name = "usbmux ascolto" };
+        thread.Start();
+        return s;
+    }
+
+    private static Dictionary<string, object> ReadMessage(Stream s)
+    {
+        var h = new byte[16];
+        s.ReadExactly(h);
+        int len = BinaryPrimitives.ReadInt32LittleEndian(h);
+        if (len < 16 || len > 64 << 20) throw new UsbmuxException("risposta del servizio Apple non valida");
+        var payload = new byte[len - 16];
+        s.ReadExactly(payload);
+        return PropertyList.ParseDict(payload);
+    }
+
     private Dictionary<string, object> Exchange(Stream s, Dictionary<string, object> msg)
     {
         var tag = Interlocked.Increment(ref _tag);
@@ -167,13 +216,7 @@ public sealed class UsbmuxClient
             s.Write(body);
             s.Flush();
 
-            var h = new byte[16];
-            s.ReadExactly(h);
-            int len = BinaryPrimitives.ReadInt32LittleEndian(h);
-            if (len < 16 || len > 64 << 20) throw new UsbmuxException("risposta del servizio Apple non valida");
-            var payload = new byte[len - 16];
-            s.ReadExactly(payload);
-            return PropertyList.ParseDict(payload);
+            return ReadMessage(s);
         }
         catch (Exception e) when (e is IOException or EndOfStreamException or FormatException or System.Xml.XmlException)
         {

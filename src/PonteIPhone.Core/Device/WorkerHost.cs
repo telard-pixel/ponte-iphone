@@ -196,6 +196,9 @@ public static class WorkerHost
             case WorkerProtocol.OpDelete:
                 send(Ok(backend.Delete(req.Ids ?? [])));
                 break;
+            case WorkerProtocol.OpStorage:
+                send(Ok(backend.GetStorage(ct)));
+                break;
             default:
                 send(new WireMessage { Id = req.Id, Kind = WorkerProtocol.KindError, Error = "Operazione sconosciuta: " + req.Op });
                 break;
