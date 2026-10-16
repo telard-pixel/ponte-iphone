@@ -147,6 +147,7 @@ public sealed partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(NoDeviceTitle));
         OnPropertyChanged(nameof(NoDeviceText));
         OnPropertyChanged(nameof(ShowDropHint));
+        OnPropertyChanged(nameof(ShowWiredHint));
         OnPropertyChanged(nameof(ShowLocked));
         OnPropertyChanged(nameof(ShowNoCameraRoll));
         OnPropertyChanged(nameof(ShowLibrary));
@@ -301,8 +302,10 @@ public sealed partial class MainViewModel : ObservableObject
                 _noPhotosSince = null;
                 if (Screen != AppScreen.NoDevice) { CloseLibrary(); Screen = AppScreen.NoDevice; ShowBanner(null); }
                 DriverInstalled = _demo || AppleDriver.IsInstalled();
+                await CheckWhyNoDeviceAsync();
                 return;
             }
+            ClearNoDeviceCheck();
 
             // Stesso telefono ancora lì: "nessuna foto" non si riapre da solo (lo fa Riprova), e per
             // "bloccato" o "Autorizza" si rispetta l'attesa: niente sessioni nuove ogni 3 secondi per niente.
@@ -1381,11 +1384,66 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>Caduto da poco un iPhone con iOS 26 o successivo: quasi sempre è lo schermo che si è bloccato.</summary>
     public bool ShowDropHint => _lastDropAt is { } t && DateTime.UtcNow - t < TimeSpan.FromMinutes(15);
 
-    public string NoDeviceTitle => ShowDropHint ? "Sblocca l'iPhone" : "Collega l'iPhone con il cavo USB";
+    /// <summary>Cosa dire senza telefono: la caduta da schermo bloccato prima, poi la diagnosi, poi il testo generico.</summary>
+    private bool UseDiagnosis => NoDeviceInfo is { Verdict: not NoDeviceVerdict.NothingOnCable } d
+                                 && !(ShowDropHint && d.Verdict == NoDeviceVerdict.DataBlocked);
 
-    public string NoDeviceText => ShowDropHint
+    public string NoDeviceTitle => UseDiagnosis ? NoDeviceInfo!.Title : ShowDropHint ? "Sblocca l'iPhone"
+        : NoDeviceInfo is { } d ? d.Title : "Collega l'iPhone con il cavo USB";
+
+    public string NoDeviceText => UseDiagnosis ? NoDeviceInfo!.Text : ShowDropHint
         ? "L'iPhone ha chiuso il collegamento, quasi sempre perché lo schermo si è bloccato: da iOS 26 passa i dati al PC solo da sbloccato. Sbloccalo (se serve stacca e riattacca il cavo): la libreria torna da sola."
-        : "La libreria compare da sola appena il telefono è pronto.";
+        : NoDeviceInfo is { } d2 ? d2.Text : "La libreria compare da sola appena il telefono è pronto.";
+
+    /// <summary>Il riquadro "Accessori cablati": dopo una caduta, o quando l'iPhone è sul cavo ma non passa i dati.</summary>
+    public bool ShowWiredHint => ShowDropHint || NoDeviceInfo is { Verdict: NoDeviceVerdict.DataBlocked };
+
+    // ================================================================== perché non si vede l'iPhone
+
+    /// <summary>Ultima diagnosi senza telefono (null con il telefono collegato o prima del primo controllo).</summary>
+    public NoDeviceDiagnosis? NoDeviceInfo { get; private set; }
+    private DateTime? _noDeviceSince;
+    private DateTime _nextNoDeviceCheck;
+    private string? _lastNoDeviceSummary;
+
+    /// <summary>
+    /// Senza iPhone: ogni 6 secondi guarda il cavo (Windows) e il servizio Apple, scrive nel registro quando cambia
+    /// qualcosa e manda il rapporto se dopo un minuto l'iPhone è ancora invisibile (due minuti se sul cavo non c'è niente).
+    /// Il 16/10 l'iPhone con iOS 27 "non veniva rilevato" e non era arrivata nessuna traccia.
+    /// </summary>
+    private async Task CheckWhyNoDeviceAsync()
+    {
+        if (_demo || DateTime.UtcNow < _nextNoDeviceCheck) return;
+        _nextNoDeviceCheck = DateTime.UtcNow + TimeSpan.FromSeconds(6);
+        _noDeviceSince ??= DateTime.UtcNow;
+        NoDeviceDiagnosis d;
+        try { d = await Task.Run(NoDeviceCheck.Run); }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            LogOnce("Controllo senza iPhone non riuscito: " + e.Message);
+            return;
+        }
+        if (Device is not null || Screen != AppScreen.NoDevice) return;
+        NoDeviceInfo = d;
+        if (d.Summary != _lastNoDeviceSummary)
+        {
+            _lastNoDeviceSummary = d.Summary;
+            _log.Info("Nessun iPhone per l'app. " + d.Summary);
+        }
+        RaiseScreen();
+        var waited = DateTime.UtcNow - _noDeviceSince.Value;
+        if (waited > (d.Verdict == NoDeviceVerdict.NothingOnCable ? TimeSpan.FromMinutes(2) : TimeSpan.FromMinutes(1)))
+            ReportProblem("iPhone non rilevato: " + d.Verdict);
+    }
+
+    private void ClearNoDeviceCheck()
+    {
+        _noDeviceSince = null;
+        _lastNoDeviceSummary = null;
+        if (NoDeviceInfo is null) return;
+        NoDeviceInfo = null;
+        RaiseScreen();
+    }
 
     // ================================================================== spazio sull'iPhone
 
@@ -1539,6 +1597,7 @@ public sealed partial class MainViewModel : ObservableObject
         Line("Ultimo rapporto", _reporter.LastResult + (ProblemReporter.PendingCount is > 0 and var queued ? $" · {queued} in coda" : ""));
         Line("Aggiornamenti", UpdateStatus.Length > 0 ? UpdateStatus : "non ancora controllati");
         if (_lastEnumeration is not null) Line("Ultimo elenco", _lastEnumeration);
+        if (Device is null && NoDeviceInfo is { } why) Line("Senza iPhone", why.Summary);
         if (_drops.Count > 0) Line("Scollegamenti", $"{_drops.Count} negli ultimi 10 minuti");
         if (Breakdown is { } mem)
             Line("Memoria", string.Join(", ", mem.Slices.Select(x => $"{x.Name} {TransferEngine.Format(x.Bytes)}")) + $"; {mem.Apps.Count} app"
@@ -1784,8 +1843,17 @@ public sealed partial class MainViewModel : ObservableObject
         Screen = AppScreen.NoDevice;
     }
 
+    internal void DemoShowDataBlocked()
+    {
+        _lastDropAt = null;
+        NoDeviceInfo = NoDeviceDiagnosis.Decide(true, null, 0, 0,
+            [new AppleUsbDevice(@"USB\VID_05AC&PID_12A8\00008101000A1B2C3D4E5F60", "Apple Mobile Device USB Composite Device", 0)]);
+        RaiseScreen();
+    }
+
     internal void DemoShowDrop()
     {
+        NoDeviceInfo = null;
         _lastDropAt = DateTime.UtcNow;
         RaiseScreen();
     }

@@ -91,6 +91,10 @@ public static class ScreenshotRunner
                 await Settle(600);
                 Save(window, Path.Combine(folder, "9b-iphone-bloccato-ios26.png"));
 
+                vm.DemoShowDataBlocked();
+                await Settle(600);
+                Save(window, Path.Combine(folder, "9c-iphone-sul-cavo-senza-dati.png"));
+
                 // Di nuovo la libreria per la versione scura.
                 await vm.ReloadCommand.ExecuteAsync(null);
                 await vm.OnDevicesChangedAsync();

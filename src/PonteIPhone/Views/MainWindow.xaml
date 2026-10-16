@@ -320,7 +320,7 @@
                     <TextBlock Text="{Binding NoDeviceTitle}" FontSize="26" FontWeight="SemiBold" TextWrapping="Wrap" />
                     <TextBlock Text="{Binding NoDeviceText}" Style="{StaticResource Caption}" FontSize="13" Margin="0,6,0,22" TextWrapping="Wrap" />
                     <Border Background="{DynamicResource SystemFillColorCautionBackgroundBrush}" CornerRadius="6" Padding="14,10" Margin="0,0,0,22"
-                            Visibility="{Binding ShowDropHint, Converter={StaticResource BoolToVis}}">
+                            Visibility="{Binding ShowWiredHint, Converter={StaticResource BoolToVis}}">
                         <StackPanel>
                             <TextBlock FontWeight="SemiBold" TextWrapping="Wrap" Text="Per non doverlo sbloccare ogni volta" />
                             <TextBlock TextWrapping="Wrap" FontSize="12.5" Margin="0,4,0,0"
