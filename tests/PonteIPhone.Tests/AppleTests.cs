@@ -285,7 +285,8 @@ public sealed class AppleTests : IDisposable
         var b = backend.GetStorage(CancellationToken.None);
 
         Assert.Equal(128_000_000_000, b.Capacity);
-        Assert.Equal(40_000_000_000, b.Free);
+        // Libero come AFC (28 GB, come la barretta laterale), non i 40 di com.apple.disk_usage (16/10: 74 contro 14 su iOS 27).
+        Assert.Equal(28_000_000_000, b.Free);
         Assert.Equal(b.Capacity, b.Slices.Sum(x => x.Bytes)); // la barra torna sempre al totale
         long Slice(string key) => b.Slices.FirstOrDefault(x => x.Key == key)?.Bytes ?? 0;
         Assert.Equal(12_000_000_000, Slice("system"));                    // disco meno partizione dati
@@ -295,7 +296,7 @@ public sealed class AppleTests : IDisposable
         Assert.Equal(0, Slice("music"));
         Assert.True(Slice("other") > 0);
         Assert.Equal(["WhatsApp", "Maps", "Calcolatrice X"], b.Apps.Select(a => a.Name));
-        Assert.Empty(b.Notes);
+        Assert.Contains("considera liberi", Assert.Single(b.Notes));
     }
 
     [Fact]
@@ -306,6 +307,14 @@ public sealed class AppleTests : IDisposable
         Assert.Equal(100, b.Slices.Sum(x => x.Bytes));
         Assert.Equal(60, b.Slices.Single(x => x.Key == "free").Bytes);
         Assert.DoesNotContain(b.Slices, x => x.Key == "other");
+    }
+
+    [Fact]
+    public void TinySlicesGoToOther()
+    {
+        var b = StorageBreakdown.Build(128_000_000_000, 14_000_000_000, 6_000_000_000, [], photos: 5_800_000_000, music: 0, books: 117_000, notes: []);
+        Assert.DoesNotContain(b.Slices, x => x.Key == "books");
+        Assert.Equal(128_000_000_000, b.Slices.Sum(x => x.Bytes));
     }
 
     [Fact]

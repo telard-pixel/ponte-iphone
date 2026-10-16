@@ -327,12 +327,23 @@ public sealed partial class AppleBackend : IDeviceBackend
 
         return Guard(() =>
         {
-            if (capacity == 0)
+            // Totale e libero come li vede AFC (gli stessi della barretta laterale) quando ci sono. Il libero di
+            // com.apple.disk_usage non è affidabile: il 16/10 su iOS 27 diceva 74 GB liberi contro 14 di AFC, con
+            // app (43 GB), foto e sistema già oltre i 45 GB "usati" che ne venivano fuori. Si annota la differenza.
+            long afcTotal = 0, afcFree = 0;
+            try
             {
-                // Riserva: la sola partizione dei dati vista da AFC (senza iOS).
                 var di = Afc.GetDeviceInfo();
-                capacity = long.TryParse(di.GetValueOrDefault("FSTotalBytes"), out var t) ? t : 0;
-                free = long.TryParse(di.GetValueOrDefault("FSFreeBytes"), out var f) ? f : 0;
+                afcTotal = long.TryParse(di.GetValueOrDefault("FSTotalBytes"), out var t) ? t : 0;
+                afcFree = long.TryParse(di.GetValueOrDefault("FSFreeBytes"), out var f) ? f : 0;
+            }
+            catch (AfcException e) { notes.Add("Memoria da AFC non leggibile: " + e.Message); }
+            if (afcTotal > 0)
+            {
+                if (free > afcFree + (1L << 30))
+                    notes.Add($"L'iPhone considera liberi {Transfer.TransferEngine.Format(free)} (contando anche lo spazio che può liberare da solo, come cache e copie di iCloud); qui si mostra lo spazio libero adesso, {Transfer.TransferEngine.Format(afcFree)}");
+                capacity = afcTotal;
+                free = afcFree;
             }
             long photos = SumSizes(Dcim, null, ct, out _);
             var library = SumSizes("/PhotoData", PhotoLibraryBudget, ct, out bool complete);

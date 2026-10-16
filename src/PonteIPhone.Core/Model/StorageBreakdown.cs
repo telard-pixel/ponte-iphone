@@ -29,6 +29,8 @@ public sealed record StorageBreakdown(long Capacity, long Free, IReadOnlyList<St
     /// <paramref name="system"/> la parte riservata a iOS (0 se non si sa); le altre voci sono già misurate.
     /// "Altro" = usato meno tutto ciò che si è misurato (libreria Foto, cache, iCloud, Messaggi…).
     /// </summary>
+    public const long MinSlice = 1_000_000;
+
     public static StorageBreakdown Build(long capacity, long free, long system, IReadOnlyList<AppUsage> apps,
         long photos, long music, long books, IReadOnlyList<string> notes)
     {
@@ -56,7 +58,9 @@ public sealed record StorageBreakdown(long Capacity, long Free, IReadOnlyList<St
             measured[biggest] = measured[biggest] with { Bytes = measured[biggest].Bytes + used - measured.Sum(s => s.Bytes) };
             known = used;
         }
-        var slices = measured.Where(s => s.Bytes > 0).ToList();
+        // Voci sotto 1 MB (es. "Libri 117 KB · 0%" del 16/10) dicono solo rumore: vanno in "Altro".
+        var slices = measured.Where(s => s.Bytes >= MinSlice).ToList();
+        known = slices.Sum(s => s.Bytes);
         if (used - known > 0) slices.Add(new StorageSlice("other", "Altro", used - known));
         slices.Add(new StorageSlice("free", "Libero", free));
         return new StorageBreakdown(capacity, free, slices, apps.OrderByDescending(a => a.Total).ToList(), notes);

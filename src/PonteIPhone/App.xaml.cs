@@ -29,6 +29,9 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        // Senza, i formati nello XAML (StringFormat=N0) seguono l'inglese: "2,311" invece di "2.311" (schermata del 16/10).
+        FrameworkElement.LanguageProperty.OverrideMetadata(typeof(FrameworkElement),
+            new FrameworkPropertyMetadata(System.Windows.Markup.XmlLanguage.GetLanguage("it-IT")));
         _log.Info($"Avvio di Ponte iPhone {UpdateService.Current}{(_demo ? " (dimostrazione)" : "")}");
 
         var settings = AppSettings.Load(AppPaths.Settings);
