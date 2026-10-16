@@ -82,11 +82,32 @@ public sealed class FakeBackend : IDeviceBackend
     public void Enumerate(Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
     {
         EnsureReady();
+        FullEnumerations++;
         foreach (var chunk in Files.Select(f => f.Info).Chunk(500))
         {
             ct.ThrowIfCancellationRequested();
             batch(chunk);
         }
+    }
+
+    /// <summary>Elenchi completi chiesti finora (le cancellazioni dovrebbero leggere solo le cartelle che servono).</summary>
+    public int FullEnumerations { get; private set; }
+    /// <summary>Cartelle lette una per una da <see cref="EnumerateFolders"/>.</summary>
+    public List<string> FoldersRead { get; } = [];
+
+    public IReadOnlyList<string> EnumerateFolders(Func<string, bool> wanted, Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
+    {
+        EnsureReady();
+        var read = new List<string>();
+        foreach (var folder in Files.Select(f => f.Info.Folder.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!wanted(folder)) continue;
+            read.Add(folder);
+            FoldersRead.Add(folder);
+            batch(Files.Select(f => f.Info).Where(f => f.Folder.Split('/')[0].Equals(folder, StringComparison.OrdinalIgnoreCase)).ToList());
+        }
+        return read;
     }
 
     public byte[]? GetThumbnail(string objectId)

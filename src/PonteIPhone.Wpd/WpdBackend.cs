@@ -256,44 +256,87 @@ public sealed class WpdBackend : IDeviceBackend
     {
         var dcim = _dcimId ?? throw new DeviceException("iPhone non aperto o senza Rullino", DeviceErrors.WpdDeviceNotOpen);
         var buffer = new List<RemoteFile>(256);
-        Walk(dcim, "", depth: 0);
+        Walk(dcim, "", 0, buffer, batch, ct);
         if (buffer.Count > 0) batch(buffer.ToList());
-        return;
+    }
 
-        void Walk(string folderId, string folderPath, int depth)
+    /// <summary>
+    /// Solo le cartelle di primo livello sotto DCIM che <paramref name="wanted"/> accetta: sugli iPhone veri leggere
+    /// tutto il Rullino da Windows richiede minuti (16/10: 3085 file, collegamento chiuso dopo 94 s senza risposta).
+    /// Con tutta la memoria al posto di DCIM non si sa dove guardare, e si legge tutto.
+    /// </summary>
+    public IReadOnlyList<string> EnumerateFolders(Func<string, bool> wanted, Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
+    {
+        var dcim = _dcimId ?? throw new DeviceException("iPhone non aperto o senza Rullino", DeviceErrors.WpdDeviceNotOpen);
+        if (_wholeStorage)
         {
-            foreach (var id in Children(folderId))
+            Enumerate(batch, ct);
+            return ["*"];
+        }
+        var read = new List<string>();
+        var buffer = new List<RemoteFile>(256);
+        foreach (var id in Children(dcim))
+        {
+            ct.ThrowIfCancellationRequested();
+            var v = ReadFileValues(id);
+            if (v is null) continue;
+            string name;
+            bool isFolder;
+            try
             {
-                ct.ThrowIfCancellationRequested();
-                var v = ReadFileValues(id);
-                if (v is null) continue;
-                try
+                name = GetString(v, WpdApi.ObjectOriginalFileName) is { Length: > 0 } o ? o : GetString(v, WpdApi.ObjectName);
+                isFolder = GetGuid(v, WpdApi.ObjectContentType) == WpdApi.ContentTypeFolder;
+            }
+            finally
+            {
+                Release(v);
+            }
+            if (!isFolder || !wanted(name)) continue;
+            read.Add(name);
+            Walk(id, name, 1, buffer, batch, ct);
+            // Un blocco per cartella, anche vuoto: è il segno di vita per chi aspetta.
+            batch(buffer.ToList());
+            buffer.Clear();
+        }
+        return read;
+    }
+
+    private void Walk(string folderId, string folderPath, int depth, List<RemoteFile> buffer,
+        Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
+    {
+        foreach (var id in Children(folderId))
+        {
+            ct.ThrowIfCancellationRequested();
+            var v = ReadFileValues(id);
+            if (v is null) continue;
+            try
+            {
+                var name = GetString(v, WpdApi.ObjectOriginalFileName) is { Length: > 0 } o ? o : GetString(v, WpdApi.ObjectName);
+                var isFolder = GetGuid(v, WpdApi.ObjectContentType) == WpdApi.ContentTypeFolder;
+                if (isFolder)
                 {
-                    var name = GetString(v, WpdApi.ObjectOriginalFileName) is { Length: > 0 } o ? o : GetString(v, WpdApi.ObjectName);
-                    var isFolder = GetGuid(v, WpdApi.ObjectContentType) == WpdApi.ContentTypeFolder;
-                    if (isFolder)
-                    {
-                        // Sugli iPhone le foto stanno un livello sotto DCIM (100APPLE, 202601_a…).
-                        if (depth < (_wholeStorage ? 5 : 3)) Walk(id, folderPath.Length == 0 ? name : folderPath + "/" + name, depth + 1);
-                        continue;
-                    }
-                    var ext = Path.GetExtension(name).TrimStart('.');
-                    if (_wholeStorage && !(MediaGrouper.IsImage(ext) || MediaGrouper.IsVideo(ext) || MediaGrouper.IsSidecar(ext))) continue;
-                    var created = GetDate(v, WpdApi.ObjectDateAuthored) ?? GetDate(v, WpdApi.ObjectDateCreated);
-                    var modified = GetDate(v, WpdApi.ObjectDateModified);
-                    bool canDelete = !HasValue(v, WpdApi.ObjectCanDelete) || GetBool(v, WpdApi.ObjectCanDelete);
-                    buffer.Add(new RemoteFile(id, name, folderPath, (long)GetULong(v, WpdApi.ObjectSize), created, modified, canDelete,
-                        GetString(v, WpdApi.ObjectPersistentUniqueId)));
+                    // Sugli iPhone le foto stanno un livello sotto DCIM (100APPLE, 202601_a…).
+                    if (depth < (_wholeStorage ? 5 : 3))
+                        Walk(id, folderPath.Length == 0 ? name : folderPath + "/" + name, depth + 1, buffer, batch, ct);
+                    continue;
                 }
-                finally
-                {
-                    Release(v);
-                }
-                if (buffer.Count >= 200)
-                {
-                    batch(buffer.ToList());
-                    buffer.Clear();
-                }
+                var ext = Path.GetExtension(name).TrimStart('.');
+                if (_wholeStorage && !(MediaGrouper.IsImage(ext) || MediaGrouper.IsVideo(ext) || MediaGrouper.IsSidecar(ext))) continue;
+                var created = GetDate(v, WpdApi.ObjectDateAuthored) ?? GetDate(v, WpdApi.ObjectDateCreated);
+                var modified = GetDate(v, WpdApi.ObjectDateModified);
+                bool canDelete = !HasValue(v, WpdApi.ObjectCanDelete) || GetBool(v, WpdApi.ObjectCanDelete);
+                buffer.Add(new RemoteFile(id, name, folderPath, (long)GetULong(v, WpdApi.ObjectSize), created, modified, canDelete,
+                    GetString(v, WpdApi.ObjectPersistentUniqueId)));
+            }
+            finally
+            {
+                Release(v);
+            }
+            // Blocchi piccoli: ognuno è un segno di vita, e Windows sull'iPhone legge pochi file al secondo.
+            if (buffer.Count >= 50)
+            {
+                batch(buffer.ToList());
+                buffer.Clear();
             }
         }
     }

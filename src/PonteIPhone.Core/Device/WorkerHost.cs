@@ -194,7 +194,13 @@ public static class WorkerHost
                 break;
             }
             case WorkerProtocol.OpDelete:
-                send(Ok(backend.Delete(req.Ids ?? [])));
+                // Ogni passo è un segno di vita per il watchdog; i testi finiscono nel registro dell'app.
+                send(Ok(backend.Delete(req.Ids ?? [], text => send(new WireMessage
+                {
+                    Id = req.Id,
+                    Kind = WorkerProtocol.KindProgress,
+                    Data = text is null ? null : JsonSerializer.SerializeToElement(text, WorkerProtocol.Json),
+                }))));
                 break;
             case WorkerProtocol.OpStorage:
                 send(Ok(backend.GetStorage(ct)));

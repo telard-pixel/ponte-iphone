@@ -34,8 +34,24 @@ public interface IDeviceBackend : IDisposable
     /// </summary>
     DownloadResult Download(string objectId, string destination, Action<long> progress, CancellationToken ct);
 
+    /// <summary>
+    /// Solo le cartelle di primo livello sotto DCIM che <paramref name="wanted"/> accetta (per nome); restituisce quelle lette.
+    /// Chi non sa scegliere le legge tutte e restituisce "*".
+    /// </summary>
+    IReadOnlyList<string> EnumerateFolders(Func<string, bool> wanted, Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
+    {
+        Enumerate(batch, ct);
+        return ["*"];
+    }
+
     /// <summary>Cancella dal telefono, un file alla volta: l'esito di ognuno è nel risultato, non in un'eccezione.</summary>
     IReadOnlyList<DeleteResult> Delete(IReadOnlyList<string> objectIds);
+
+    /// <summary>
+    /// Come <see cref="Delete(IReadOnlyList{string})"/>, con un segno di vita a ogni passo lento: un testo per il registro,
+    /// o null quando basta far sapere che si sta ancora lavorando.
+    /// </summary>
+    IReadOnlyList<DeleteResult> Delete(IReadOnlyList<string> objectIds, Action<string?> step) => Delete(objectIds);
 
     /// <summary>Come è suddivisa la memoria (app, foto, musica…), o null se questo collegamento non lo sa dire.</summary>
     StorageBreakdown? GetStorage(CancellationToken ct) => null;

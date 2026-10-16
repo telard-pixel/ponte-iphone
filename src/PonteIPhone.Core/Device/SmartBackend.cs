@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using PonteIPhone.Core.Apple;
 using PonteIPhone.Core.Model;
 
@@ -25,6 +26,9 @@ public sealed class SmartBackend : IDeviceBackend
     private int _wpdProblem;
     /// <summary>Cosa ha visto WPD quando non è utilizzabile (cartelle, memoria): finisce nel registro.</summary>
     private string? _wpdDetail;
+    /// <summary>Cartelle WPD già lette in questo processo, e se si è già letto tutto il Rullino.</summary>
+    private readonly HashSet<string> _wpdFoldersRead = new(StringComparer.OrdinalIgnoreCase);
+    private bool _wpdWhole;
     private readonly Action<TimeSpan> _sleep;
 
     /// <param name="sleep">Attesa tra due tentativi WPD (nei test non aspetta).</param>
@@ -78,9 +82,17 @@ public sealed class SmartBackend : IDeviceBackend
     public DownloadResult Download(string objectId, string destination, Action<long> progress, CancellationToken ct) =>
         _apple.Download(objectId, destination, progress, ct);
 
-    public IReadOnlyList<DeleteResult> Delete(IReadOnlyList<string> objectIds)
+    public IReadOnlyList<DeleteResult> Delete(IReadOnlyList<string> objectIds) => Delete(objectIds, _ => { });
+
+    public IReadOnlyList<DeleteResult> Delete(IReadOnlyList<string> objectIds, Action<string?> step)
     {
-        var map = WpdFiles();
+        // In un processo nuovo (quello delle cancellazioni) l'elenco non c'è: si chiedono i dati al telefono.
+        var files = new Dictionary<string, RemoteFile?>(StringComparer.Ordinal);
+        foreach (var id in objectIds)
+            if (!files.ContainsKey(id)) files[id] = _known.TryGetValue(id, out var k) ? k : _apple.Describe(id);
+        var wanted = files.Values.OfType<RemoteFile>().ToList();
+
+        var map = WpdFiles(wanted, step);
         // Il 15/10 l'eliminazione si fermava subito con "Windows non mostra le foto": il canale Apple legge anche
         // col telefono bloccato, WPD no. Se è bloccato lo si dice (il motore aspetta lo sblocco e riprova);
         // altrimenti si riprova un paio di volte, perché appena ricollegato Windows mostra la memoria con qualche secondo di ritardo.
@@ -94,22 +106,29 @@ public sealed class SmartBackend : IDeviceBackend
             if (attempt == 3) break;
             _sleep(TimeSpan.FromSeconds(4));
             ForgetWpd();
-            map = WpdFiles();
+            map = WpdFiles(wanted, step);
         }
         if (map is null) return objectIds.Select(id => new DeleteResult(id, false, _wpdProblem, _wpdDetail)).ToList();
 
         var results = new List<DeleteResult>(objectIds.Count);
         foreach (var id in objectIds)
         {
-            // In un processo nuovo (quello delle cancellazioni) l'elenco non c'è: si chiedono i dati al telefono.
-            var file = _known.TryGetValue(id, out var k) ? k : _apple.Describe(id);
+            var file = files[id];
             var wpdId = file is null ? null : Match(map, file);
+            if (wpdId is null && file is not null && !_wpdWhole)
+            {
+                // Non era nelle cartelle del suo mese (data cambiata, nomi di cartella diversi): si legge tutto, una volta sola.
+                try { ReadWholeWpd(map, step); }
+                catch (DeviceException e) { step("Windows: lettura completa non riuscita: " + e.Message); }
+                wpdId = Match(map, file);
+            }
             if (wpdId is null)
             {
                 results.Add(new DeleteResult(id, false, DeviceErrors.NoWpdMatch));
                 continue;
             }
             var r = Wpd.Delete([wpdId]).FirstOrDefault() ?? new DeleteResult(wpdId, false, DeviceErrors.GenFailure);
+            step(null);
             if (!r.Ok && DeviceErrors.IsNotFound(r.HResult) && _apple.Describe(id) is not null)
             {
                 // WPD dice "non trovato" ma il file è ancora sul telefono: ID vecchio, non una cancellazione riuscita.
@@ -131,6 +150,8 @@ public sealed class SmartBackend : IDeviceBackend
         _wpdFilesFor = null;
         _wpdProblem = 0;
         _wpdDetail = null;
+        _wpdFoldersRead.Clear();
+        _wpdWhole = false;
     }
 
     private static void RemoveFromMap(Dictionary<string, List<RemoteFile>> map, string wpdId)
@@ -138,56 +159,147 @@ public sealed class SmartBackend : IDeviceBackend
         foreach (var list in map.Values) list.RemoveAll(f => f.ObjectId == wpdId);
     }
 
-    /// <summary>Elenco WPD del telefono aperto, o null (con il motivo in <see cref="_wpdProblem"/>).</summary>
-    private Dictionary<string, List<RemoteFile>>? WpdFiles()
+    private static void AddToMap(Dictionary<string, List<RemoteFile>> map, IReadOnlyList<RemoteFile> batch)
+    {
+        foreach (var f in batch)
+        {
+            if (!map.TryGetValue(f.Name, out var list)) map[f.Name] = list = [];
+            if (!list.Any(x => x.ObjectId == f.ObjectId)) list.Add(f);
+        }
+    }
+
+    /// <summary>
+    /// Elenco WPD del telefono aperto con almeno le cartelle dei file da cancellare, o null (con il motivo in
+    /// <see cref="_wpdProblem"/>). Il 16/10, appena Windows ha cominciato a mostrare le foto, leggere tutto il Rullino
+    /// (3085 file, uno per uno) lasciava l'app ferma su "Tolgo dal telefono" finché il collegamento veniva chiuso:
+    /// ora si leggono solo le cartelle che servono.
+    /// </summary>
+    private Dictionary<string, List<RemoteFile>>? WpdFiles(IReadOnlyList<RemoteFile> wanted, Action<string?> step)
     {
         var udid = _apple.OpenedUdid;
         if (udid is null) { _wpdProblem = DeviceErrors.WpdUnavailable; _wpdDetail = "telefono non aperto"; return null; }
-        if (_wpdFiles is not null && _wpdFilesFor == udid) return _wpdFiles;
-        if (_wpdProblem != 0 && _wpdFilesFor == udid) return null;
-        _wpdFilesFor = udid;
+        if (_wpdFiles is null || _wpdFilesFor != udid)
+        {
+            if (_wpdProblem != 0 && _wpdFilesFor == udid) return null;
+            _wpdFilesFor = udid;
+            try
+            {
+                var all = Wpd.ListDevices();
+                var dev = PickWpdDevice(all, udid, _apple.UsbDeviceCount());
+                if (dev is null)
+                {
+                    // Nessun iPhone in Windows è un "non mostra", non un "più telefoni".
+                    _wpdProblem = all.Count == 0 ? DeviceErrors.WpdUnavailable : DeviceErrors.WpdAmbiguous;
+                    _wpdDetail = $"Windows vede {all.Count} dispositivi portatili";
+                    return null;
+                }
+                var opened = Wpd.Open(dev.Id);
+                step(null);
+                if (!opened.Ready)
+                {
+                    _wpdProblem = DeviceErrors.WpdUnavailable;
+                    _wpdDetail = $"Windows: {opened.State}; " + string.Join(" | ", opened.Notes ?? []);
+                    return null;
+                }
+                _wpdDetail = string.Join(" | ", opened.Notes ?? []);
+                _wpdFiles = new Dictionary<string, List<RemoteFile>>(StringComparer.OrdinalIgnoreCase);
+                _wpdFoldersRead.Clear();
+                _wpdWhole = false;
+            }
+            catch (DeviceException e)
+            {
+                _wpdProblem = DeviceErrors.WpdUnavailable;
+                _wpdDetail = "errore di Windows: " + e.Message;
+                return null;
+            }
+        }
+        var map = _wpdFiles;
         try
         {
-            var all = Wpd.ListDevices();
-            var dev = PickWpdDevice(all, udid, _apple.UsbDeviceCount());
-            if (dev is null)
-            {
-                // Nessun iPhone in Windows è un "non mostra", non un "più telefoni".
-                _wpdProblem = all.Count == 0 ? DeviceErrors.WpdUnavailable : DeviceErrors.WpdAmbiguous;
-                _wpdDetail = $"Windows vede {all.Count} dispositivi portatili";
-                return null;
-            }
-            var opened = Wpd.Open(dev.Id);
-            if (!opened.Ready)
-            {
-                _wpdProblem = DeviceErrors.WpdUnavailable;
-                _wpdDetail = $"Windows: {opened.State}; " + string.Join(" | ", opened.Notes ?? []);
-                return null;
-            }
-            var map = new Dictionary<string, List<RemoteFile>>(StringComparer.OrdinalIgnoreCase);
-            Wpd.Enumerate(batch =>
-            {
-                foreach (var f in batch)
-                {
-                    if (!map.TryGetValue(f.Name, out var list)) map[f.Name] = list = [];
-                    list.Add(f);
-                }
-            }, CancellationToken.None);
-            if (map.Count == 0)
-            {
-                _wpdProblem = DeviceErrors.WpdUnavailable;
-                _wpdDetail = "Windows apre l'iPhone ma non elenca nessun file; " + string.Join(" | ", opened.Notes ?? []);
-                return null;
-            }
-            _wpdProblem = 0;
-            return _wpdFiles = map;
+            ReadWpdFolders(map, wanted, step);
+            // Cartelle del mese trovate ma vuote: prima di dire "nessun file" si guarda tutto.
+            if (map.Count == 0 && !_wpdWhole) ReadWholeWpd(map, step);
         }
         catch (DeviceException e)
         {
+            _wpdFiles = null;
             _wpdProblem = DeviceErrors.WpdUnavailable;
             _wpdDetail = "errore di Windows: " + e.Message;
             return null;
         }
+        if (map.Count == 0)
+        {
+            _wpdFiles = null;
+            _wpdProblem = DeviceErrors.WpdUnavailable;
+            _wpdDetail = "Windows apre l'iPhone ma non elenca nessun file; " + _wpdDetail;
+            return null;
+        }
+        _wpdProblem = 0;
+        return map;
+    }
+
+    /// <summary>
+    /// Le cartelle WPD dove possono stare i file: stesso nome del canale Apple (100APPLE) oppure il mese della foto,
+    /// perché Windows le mostra per mese (202610_a). Un giorno di margine per il fuso orario.
+    /// </summary>
+    private void ReadWpdFolders(Dictionary<string, List<RemoteFile>> map, IReadOnlyList<RemoteFile> wanted, Action<string?> step)
+    {
+        if (_wpdWhole) return;
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var months = new HashSet<(int, int)>();
+        foreach (var f in wanted)
+        {
+            if (f.Folder.Split('/')[0] is { Length: > 0 } top) names.Add(top);
+            foreach (var d in new[] { f.Created, f.Modified })
+            {
+                if (d is not { } day) continue;
+                foreach (var near in new[] { day.AddDays(-1), day, day.AddDays(1) }) months.Add((near.Year, near.Month));
+            }
+        }
+        bool Wanted(string folder)
+        {
+            if (_wpdFoldersRead.Contains(folder)) return false;
+            if (names.Contains(folder)) return true;
+            return MediaGrouper.DateFromFolder(folder) is { } m && months.Contains((m.Year, m.Month));
+        }
+
+        var clock = Stopwatch.StartNew();
+        int count = 0;
+        var read = Wpd.EnumerateFolders(Wanted, batch =>
+        {
+            AddToMap(map, batch);
+            count += batch.Count;
+            step(null);
+        }, CancellationToken.None);
+        if (read.Contains("*"))
+        {
+            _wpdWhole = true;
+            step($"Windows: letta tutta la memoria ({count} file) in {clock.Elapsed.TotalSeconds:0.0} s");
+            return;
+        }
+        foreach (var r in read) _wpdFoldersRead.Add(r);
+        if (read.Count == 0 && _wpdFoldersRead.Count == 0)
+        {
+            step("Windows: nessuna cartella del mese delle foto, leggo tutto il Rullino");
+            ReadWholeWpd(map, step);
+            return;
+        }
+        if (read.Count > 0)
+            step($"Windows: lette le cartelle {string.Join(", ", read)} ({count} file) in {clock.Elapsed.TotalSeconds:0.0} s");
+    }
+
+    private void ReadWholeWpd(Dictionary<string, List<RemoteFile>> map, Action<string?> step)
+    {
+        var clock = Stopwatch.StartNew();
+        int count = 0;
+        Wpd.Enumerate(batch =>
+        {
+            AddToMap(map, batch);
+            count += batch.Count;
+            step(null);
+        }, CancellationToken.None);
+        _wpdWhole = true;
+        step($"Windows: letto tutto il Rullino ({count} file) in {clock.Elapsed.TotalSeconds:0.0} s");
     }
 
     /// <summary>

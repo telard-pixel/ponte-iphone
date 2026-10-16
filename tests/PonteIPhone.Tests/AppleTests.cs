@@ -252,6 +252,30 @@ public sealed class AppleTests : IDisposable
 
         Assert.Equal(1, report.Deleted);
         Assert.Equal(["IMG_0002.JPG"], fake.Deleted);
+        Assert.Equal(1, fake.FullEnumerations); // nessuna cartella del suo mese: tutto il Rullino, una volta
+    }
+
+    [Fact]
+    public async Task DeleteReadsOnlyTheMonthFolderInWindows()
+    {
+        // 16/10: con Windows che mostra le foto, leggere tutto il Rullino (3085 file) lasciava l'app ferma su "Tolgo dal telefono".
+        // Windows chiama le cartelle per mese (202510_a), il canale Apple no (100APPLE): si legge solo il mese della foto.
+        var fake = new FakeBackend();
+        var oct = new DateTime(2025, 10, 9, 10, 0, 0);
+        fake.Add("202510_a", "IMG_0002.JPG", _phone.Files["/DCIM/100APPLE/IMG_0002.JPG"].Length, oct, content: _phone.Files["/DCIM/100APPLE/IMG_0002.JPG"]);
+        fake.Add("202509_a", "IMG_0900.JPG", 1000, oct.AddMonths(-1));
+        fake.Add("202606_a", "IMG_0901.JPG", 1000, oct.AddMonths(8));
+        var steps = new List<string>();
+
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => fake);
+        Assert.True(backend.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid).Ready);
+        var result = Assert.Single(backend.Delete(["/DCIM/100APPLE/IMG_0002.JPG"], t => { if (t is not null) steps.Add(t); }));
+
+        Assert.True(result.Ok);
+        Assert.Equal(["IMG_0002.JPG"], fake.Deleted);
+        Assert.Equal(["202510_a"], fake.FoldersRead);
+        Assert.Equal(0, fake.FullEnumerations);
+        Assert.Contains(steps, t => t.Contains("202510_a"));
     }
 
     [Fact]

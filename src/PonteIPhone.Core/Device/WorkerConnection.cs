@@ -371,7 +371,8 @@ public sealed class WorkerConnection : IDeviceConnection
     {
         // La prima volta Windows rilegge il telefono per ritrovare i file: tempo fisso più qualche secondo a file.
         var timeout = TimeSpan.FromSeconds(90) + TimeSpan.FromSeconds(3 * objectIds.Count);
-        var data = await CallAsync(new WireRequest { Op = WorkerProtocol.OpDelete, Ids = objectIds.ToArray() }, timeout, ct);
+        var data = await CallAsync(new WireRequest { Op = WorkerProtocol.OpDelete, Ids = objectIds.ToArray() }, timeout, ct,
+            onProgress: e => { if (e.ValueKind == JsonValueKind.String) _log?.Invoke(e.GetString()!); });
         return data?.Deserialize<List<DeleteResult>>(WorkerProtocol.Json) ?? [];
     }
 
