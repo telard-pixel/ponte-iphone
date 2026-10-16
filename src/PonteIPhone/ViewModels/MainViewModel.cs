@@ -262,6 +262,8 @@ public sealed partial class MainViewModel : ObservableObject
         // con la libreria aperta ogni 9 (solo l'elenco, per accorgersi che è stato scollegato).
         _pollTicks++;
         if (!_demo && _preparedUpdate is null && DateTime.UtcNow > _nextUpdateCheck) _ = CheckUpdatesAsync(automatic: true);
+        if (IsTransferring && _waitingSince is { } ws && DateTime.UtcNow - ws > TimeSpan.FromSeconds(90))
+            ReportProblem(_transferMode == TransferMode.Delete ? "eliminazione ferma: aspetta l'iPhone" : "trasferimento fermo: aspetta l'iPhone");
         if (IsTransferring || Screen == AppScreen.Loading) return;
         if (Screen == AppScreen.Library && _pollTicks % 3 != 0) return;
         if (Screen == AppScreen.NoCameraRoll && _noPhotosSince is { } since && DateTime.UtcNow - since > TimeSpan.FromSeconds(30))
@@ -1227,12 +1229,16 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     private TransferPhase _lastPhase;
+    /// <summary>Da quando il trasferimento (o l'eliminazione) aspetta l'iPhone: oltre 90 s parte il rapporto.</summary>
+    private DateTime? _waitingSince;
 
     private void OnTransferStatus(TransferStatus s)
     {
         // L'iPhone si è bloccato (o scollegato): chi è lontano dal PC deve accorgersene.
         if (s.Phase == TransferPhase.WaitingForDevice && _lastPhase != TransferPhase.WaitingForDevice && !_demo)
             Attention.Request(Application.Current.MainWindow);
+        if (s.Phase == TransferPhase.WaitingForDevice) _waitingSince ??= DateTime.UtcNow;
+        else _waitingSince = null;
         _lastPhase = s.Phase;
         TransferFraction = s.Phase == TransferPhase.Deleting
             ? (s.ItemsTotal == 0 ? 1 : (double)s.ItemsDone / s.ItemsTotal)
@@ -1375,6 +1381,8 @@ public sealed partial class MainViewModel : ObservableObject
         _drops.Add(now);
         _lastDropAt = IosMajor(dev.Firmware) >= 26 ? now : null;
         _log.Info($"iPhone scollegato (iOS {dev.Firmware}; {_drops.Count} volte negli ultimi 10 minuti)");
+        NoteFlap(now);
+        _usbWasPresent = false; // la sparizione è già contata qui
         if (_drops.Count >= 3) ReportProblem("iPhone che si scollega spesso");
     }
 
@@ -1396,7 +1404,7 @@ public sealed partial class MainViewModel : ObservableObject
         : NoDeviceInfo is { } d2 ? d2.Text : "La libreria compare da sola appena il telefono è pronto.";
 
     /// <summary>Il riquadro "Accessori cablati": dopo una caduta, o quando l'iPhone è sul cavo ma non passa i dati.</summary>
-    public bool ShowWiredHint => ShowDropHint || NoDeviceInfo is { Verdict: NoDeviceVerdict.DataBlocked };
+    public bool ShowWiredHint => ShowDropHint || NoDeviceInfo is { Verdict: NoDeviceVerdict.DataBlocked or NoDeviceVerdict.Unstable };
 
     // ================================================================== perché non si vede l'iPhone
 
@@ -1405,6 +1413,17 @@ public sealed partial class MainViewModel : ObservableObject
     private DateTime? _noDeviceSince;
     private DateTime _nextNoDeviceCheck;
     private string? _lastNoDeviceSummary;
+    /// <summary>Quando l'iPhone è sparito dal cavo (per Windows, o dalla libreria aperta): più volte in pochi minuti = collegamento instabile.</summary>
+    private readonly List<DateTime> _flaps = [];
+    private bool _usbWasPresent;
+
+    private int NoteFlap(DateTime? at = null)
+    {
+        var now = DateTime.UtcNow;
+        _flaps.RemoveAll(t => now - t > TimeSpan.FromMinutes(5));
+        if (at is { } t0) _flaps.Add(t0);
+        return _flaps.Count;
+    }
 
     /// <summary>
     /// Senza iPhone: ogni 6 secondi guarda il cavo (Windows) e il servizio Apple, scrive nel registro quando cambia
@@ -1417,13 +1436,20 @@ public sealed partial class MainViewModel : ObservableObject
         _nextNoDeviceCheck = DateTime.UtcNow + TimeSpan.FromSeconds(6);
         _noDeviceSince ??= DateTime.UtcNow;
         NoDeviceDiagnosis d;
-        try { d = await Task.Run(NoDeviceCheck.Run); }
+        int flaps = NoteFlap();
+        try { d = await Task.Run(() => NoDeviceCheck.Run(flaps)); }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
             LogOnce("Controllo senza iPhone non riuscito: " + e.Message);
             return;
         }
         if (Device is not null || Screen != AppScreen.NoDevice) return;
+        bool present = NoDeviceDiagnosis.Roots(d.AppleUsb).Any();
+        if (_usbWasPresent && !present)
+            d = d with { Flaps = NoteFlap(DateTime.UtcNow) };
+        if (d.Flaps >= NoDeviceDiagnosis.UnstableFlaps && d.Verdict is not (NoDeviceVerdict.DriverProblem or NoDeviceVerdict.Unstable))
+            d = NoDeviceDiagnosis.Decide(d.ServiceOk, d.ServiceError, d.MuxUsb, d.MuxNetwork, d.AppleUsb, d.Flaps);
+        _usbWasPresent = present;
         NoDeviceInfo = d;
         if (d.Summary != _lastNoDeviceSummary)
         {
@@ -1439,6 +1465,7 @@ public sealed partial class MainViewModel : ObservableObject
     private void ClearNoDeviceCheck()
     {
         _noDeviceSince = null;
+        _usbWasPresent = true;
         _lastNoDeviceSummary = null;
         if (NoDeviceInfo is null) return;
         NoDeviceInfo = null;
@@ -1686,6 +1713,7 @@ public sealed partial class MainViewModel : ObservableObject
     public bool ReportProblem(string reason)
     {
         if (_demo) return false;
+        if (_reporter.WasSent(reason)) return true; // il registro non ripete la stessa riga a ogni controllo
         _log.Warn("Problema da segnalare: " + reason);
         return _reporter.Report(reason, BuildReport);
     }

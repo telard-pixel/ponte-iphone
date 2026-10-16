@@ -17,6 +17,11 @@ public enum NoDeviceVerdict
     DataBlocked,
     /// <summary>Il servizio Apple vede l'iPhone solo in Wi-Fi.</summary>
     OnlyWifi,
+    /// <summary>
+    /// L'iPhone compare e sparisce da solo anche per Windows: il collegamento USB salta (cavo, porta, presa del telefono).
+    /// Il 16/10 l'iPhone con iOS 27 spariva dal cavo ogni 30-90 s, una volta 3 s dopo l'apertura.
+    /// </summary>
+    Unstable,
 }
 
 /// <summary>
@@ -24,23 +29,29 @@ public enum NoDeviceVerdict
 /// senza telefono l'app non scriveva niente e non mandava rapporti. Ora si guarda a tre livelli (cavo per Windows,
 /// servizio Apple, Wi-Fi) e la schermata dice cosa fare in quel caso preciso.
 /// </summary>
+/// <param name="Flaps">Quante volte l'iPhone è sparito dal cavo negli ultimi minuti.</param>
 public sealed record NoDeviceDiagnosis(NoDeviceVerdict Verdict, bool ServiceOk, string? ServiceError, int MuxUsb, int MuxNetwork,
-    IReadOnlyList<AppleUsbDevice> AppleUsb)
+    IReadOnlyList<AppleUsbDevice> AppleUsb, int Flaps = 0)
 {
     /// <summary>Solo i dispositivi interi (non le loro interfacce "&amp;MI_xx").</summary>
     public static IEnumerable<AppleUsbDevice> Roots(IEnumerable<AppleUsbDevice> all) =>
         all.Where(d => !d.InstanceId.Contains("&MI_", StringComparison.OrdinalIgnoreCase));
 
-    public static NoDeviceDiagnosis Decide(bool serviceOk, string? serviceError, int muxUsb, int muxNetwork, IReadOnlyList<AppleUsbDevice> appleUsb)
+    /// <summary>Da quante sparizioni in pochi minuti il collegamento si considera instabile.</summary>
+    public const int UnstableFlaps = 2;
+
+    public static NoDeviceDiagnosis Decide(bool serviceOk, string? serviceError, int muxUsb, int muxNetwork, IReadOnlyList<AppleUsbDevice> appleUsb,
+        int flaps = 0)
     {
         var roots = Roots(appleUsb).ToList();
         var verdict =
             roots.Any(d => d.Problem != 0) ? NoDeviceVerdict.DriverProblem
+            : flaps >= UnstableFlaps ? NoDeviceVerdict.Unstable
             : !serviceOk ? NoDeviceVerdict.ServiceDown
             : roots.Count > 0 && muxUsb == 0 ? NoDeviceVerdict.DataBlocked
             : muxNetwork > 0 ? NoDeviceVerdict.OnlyWifi
             : NoDeviceVerdict.NothingOnCable;
-        return new NoDeviceDiagnosis(verdict, serviceOk, serviceError, muxUsb, muxNetwork, appleUsb);
+        return new NoDeviceDiagnosis(verdict, serviceOk, serviceError, muxUsb, muxNetwork, appleUsb, flaps);
     }
 
     public string Title => Verdict switch
@@ -49,6 +60,7 @@ public sealed record NoDeviceDiagnosis(NoDeviceVerdict Verdict, bool ServiceOk, 
         NoDeviceVerdict.DriverProblem => "Windows vede l'iPhone, ma il driver Apple non funziona",
         NoDeviceVerdict.DataBlocked => "L'iPhone è sul cavo ma non passa i dati",
         NoDeviceVerdict.OnlyWifi => "L'iPhone si vede solo in Wi-Fi",
+        NoDeviceVerdict.Unstable => "Il collegamento USB con l'iPhone va e viene",
         _ => "Collega l'iPhone con il cavo USB",
     };
 
@@ -62,6 +74,8 @@ public sealed record NoDeviceDiagnosis(NoDeviceVerdict Verdict, bool ServiceOk, 
             "Sblocca l'iPhone e guarda lo schermo: se chiede di consentire all'accessorio di connettersi tocca Consenti; se chiede di autorizzare il computer tocca Autorizza e inserisci il codice. Se non chiede niente, stacca e riattacca il cavo con il telefono sbloccato.",
         NoDeviceVerdict.OnlyWifi =>
             "Per copiare serve il cavo: collega l'iPhone al PC con un cavo USB e sbloccalo.",
+        NoDeviceVerdict.Unstable =>
+            "Windows vede l'iPhone comparire e sparire da solo, anche da sbloccato: il collegamento USB salta. Quasi sempre è il cavo o la porta. Prova un altro cavo (originale, o quello che funziona con un altro iPhone), collegalo direttamente al PC e non a un hub o alla tastiera, e controlla che nella presa del telefono non ci sia polvere o lanugine.",
         _ => "Windows non vede nessun iPhone sul cavo. Sblocca il telefono; se non compare, prova un altro cavo (alcuni servono solo a caricare) o un'altra porta USB, meglio direttamente sul PC e non su un hub o una tastiera.",
     };
 
@@ -75,7 +89,7 @@ public sealed record NoDeviceDiagnosis(NoDeviceVerdict Verdict, bool ServiceOk, 
                 : string.Join(", ", usb.Select(d => $"{d.Name} [{d.InstanceId}]" + (d.Problem != 0 ? $" problema {d.Problem}" : "")))
                   + $" ({AppleUsb.Count - usb.Count} interfacce)";
             var service = ServiceOk ? $"servizio Apple ok, {MuxUsb} via cavo e {MuxNetwork} in Wi-Fi" : "servizio Apple non risponde: " + ServiceError;
-            return $"{Verdict}: Windows: {cable}; {service}";
+            return $"{Verdict}: Windows: {cable}; {service}" + (Flaps > 0 ? $"; sparito dal cavo {Flaps} volte negli ultimi 5 minuti" : "");
         }
     }
 }

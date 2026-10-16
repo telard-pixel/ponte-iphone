@@ -12,7 +12,8 @@ namespace PonteIPhone.Services;
 /// </summary>
 public static class NoDeviceCheck
 {
-    public static NoDeviceDiagnosis Run()
+    /// <param name="flaps">Sparizioni dal cavo viste dall'app negli ultimi minuti.</param>
+    public static NoDeviceDiagnosis Run(int flaps)
     {
         bool serviceOk;
         string? serviceError = null;
@@ -29,7 +30,7 @@ public static class NoDeviceCheck
             serviceOk = false;
             serviceError = e.Message;
         }
-        return NoDeviceDiagnosis.Decide(serviceOk, serviceError, usb, network, AppleUsbDevices());
+        return NoDeviceDiagnosis.Decide(serviceOk, serviceError, usb, network, AppleUsbDevices(), flaps);
     }
 
     /// <summary>Dispositivi USB presenti con il produttore Apple, con nome e codice problema di Gestione dispositivi.</summary>

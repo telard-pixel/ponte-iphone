@@ -29,6 +29,12 @@ public sealed class ProblemReporter(AppLog log)
     /// <summary>Esito dell'ultimo invio, per la diagnostica.</summary>
     public string LastResult { get; private set; } = "nessun invio in questa sessione";
 
+    /// <summary>Già mandato per questo motivo in questa sessione?</summary>
+    public bool WasSent(string reason)
+    {
+        lock (_sent) return _sent.Contains(reason);
+    }
+
     /// <summary>True se il rapporto parte (o è già partito per questo motivo in questa sessione).</summary>
     public bool Report(string reason, Func<string> buildText)
     {

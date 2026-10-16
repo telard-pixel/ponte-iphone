@@ -34,6 +34,17 @@ public sealed class NoDeviceTests
     }
 
     [Fact]
+    public void PhoneThatComesAndGoesIsUnstableEvenWhenItIsThereNow()
+    {
+        // 16/10: l'iPhone con iOS 27 compariva e spariva dal cavo per Windows: la colpa non è dello schermo bloccato.
+        var d = NoDeviceDiagnosis.Decide(true, null, 0, 0, [Phone], flaps: 2);
+        Assert.Equal(NoDeviceVerdict.Unstable, d.Verdict);
+        Assert.Contains("cavo", d.Text);
+        Assert.Contains("2 volte", d.Summary);
+        Assert.Equal(NoDeviceVerdict.DataBlocked, NoDeviceDiagnosis.Decide(true, null, 0, 0, [Phone], flaps: 1).Verdict);
+    }
+
+    [Fact]
     public void ServiceDownIsSaidPlainly()
     {
         var d = NoDeviceDiagnosis.Decide(false, "Servizio Apple non raggiungibile", 0, 0, []);
