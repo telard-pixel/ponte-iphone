@@ -51,7 +51,10 @@ public sealed record StorageBreakdown(long Capacity, long Free, IReadOnlyList<St
         {
             double k = (double)used / known;
             measured = measured.Select(s => s with { Bytes = (long)(s.Bytes * k) }).ToList();
-            known = measured.Sum(s => s.Bytes);
+            // Gli arrotondamenti vanno alla voce più grande, non in un "Altro" di pochi byte.
+            int biggest = measured.IndexOf(measured.MaxBy(s => s.Bytes)!);
+            measured[biggest] = measured[biggest] with { Bytes = measured[biggest].Bytes + used - measured.Sum(s => s.Bytes) };
+            known = used;
         }
         var slices = measured.Where(s => s.Bytes > 0).ToList();
         if (used - known > 0) slices.Add(new StorageSlice("other", "Altro", used - known));
