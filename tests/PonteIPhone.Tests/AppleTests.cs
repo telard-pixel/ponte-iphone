@@ -303,9 +303,10 @@ public sealed class AppleTests : IDisposable
     public void StorageBarNeverExceedsTheTotal()
     {
         // Dimensioni delle app arrotondate per eccesso dal telefono: più grandi dell'usato.
-        var b = StorageBreakdown.Build(100, 60, 10, [new AppUsage("A", "a", 30, 40)], photos: 5, music: 0, books: 0, notes: []);
-        Assert.Equal(100, b.Slices.Sum(x => x.Bytes));
-        Assert.Equal(60, b.Slices.Single(x => x.Key == "free").Bytes);
+        const long G = 1_000_000_000;
+        var b = StorageBreakdown.Build(100 * G, 60 * G, 10 * G, [new AppUsage("A", "a", 30 * G, 40 * G)], photos: 5 * G, music: 0, books: 0, notes: []);
+        Assert.Equal(100 * G, b.Slices.Sum(x => x.Bytes));
+        Assert.Equal(60 * G, b.Slices.Single(x => x.Key == "free").Bytes);
         Assert.DoesNotContain(b.Slices, x => x.Key == "other");
     }
 
