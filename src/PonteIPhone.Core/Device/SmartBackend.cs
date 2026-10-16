@@ -115,6 +115,11 @@ public sealed class SmartBackend : IDeviceBackend
         {
             var file = files[id];
             var wpdId = file is null ? null : Match(map, file);
+            if (wpdId is not null && !_wpdWhole && !SameDay(map, wpdId, file!))
+            {
+                // Con solo alcune cartelle lette un omonimo di un altro mese non si vede: la data deve tornare.
+                wpdId = null;
+            }
             if (wpdId is null && file is not null && !_wpdWhole)
             {
                 // Non era nelle cartelle del suo mese (data cambiata, nomi di cartella diversi): si legge tutto, una volta sola.
@@ -157,6 +162,15 @@ public sealed class SmartBackend : IDeviceBackend
     private static void RemoveFromMap(Dictionary<string, List<RemoteFile>> map, string wpdId)
     {
         foreach (var list in map.Values) list.RemoveAll(f => f.ObjectId == wpdId);
+    }
+
+    /// <summary>Data di Windows e del canale Apple entro un giorno (fuso orario); senza una delle due non si scarta.</summary>
+    private static bool SameDay(Dictionary<string, List<RemoteFile>> map, string wpdId, RemoteFile file)
+    {
+        var w = map.Values.SelectMany(l => l).FirstOrDefault(f => f.ObjectId == wpdId);
+        var a = file.Created ?? file.Modified;
+        var b = w?.Created ?? w?.Modified;
+        return a is null || b is null || Math.Abs((a.Value - b.Value).TotalHours) <= 26;
     }
 
     private static void AddToMap(Dictionary<string, List<RemoteFile>> map, IReadOnlyList<RemoteFile> batch)
