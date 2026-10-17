@@ -663,7 +663,8 @@ public sealed class TransferEngine
     /// <param name="mustBeOnPc">Con Sposta: ultimo controllo che la copia sul PC ci sia ancora, intera.</param>
     private async Task DeleteItemsAsync(IReadOnlyList<MediaItem> items, Func<MediaItem, bool>? mustBeOnPc, CancellationToken ct)
     {
-        var deleting = mustBeOnPc is null ? "Tolgo dal telefono gli elementi scelti…" : "Tolgo dal telefono gli elementi copiati e verificati…";
+        var deleting = mustBeOnPc is null ? "Tolgo dal telefono gli elementi scelti… Tieni l'iPhone sbloccato."
+            : "Tolgo dal telefono gli elementi copiati e verificati… Tieni l'iPhone sbloccato.";
         _itemsTotal = items.Count;
         _itemsDone = 0;
         SetPhase(TransferPhase.Deleting, deleting);
@@ -671,6 +672,7 @@ public sealed class TransferEngine
         var retries = new Dictionary<MediaItem, int>();
         bool probed = false;
         bool waitingUnlock = false;
+        int hiccups = 0;
 
         // Al terzo errore lo stesso elemento resta sul telefono. L'attesa dello sblocco non conta come errore.
         void Requeue(IEnumerable<MediaItem> again, bool countAsError)
@@ -713,16 +715,27 @@ public sealed class TransferEngine
             catch (DeviceException e) when (e.Kind == DeviceErrorKind.Gone)
             {
                 // Scollegato: si aspetta che torni e si riprova.
+                // Non conta come errore: su iOS 26+ succede anche solo perché lo schermo si è bloccato (revisione 17/10).
                 _log?.Warn("Cancellazione: " + e.Message);
                 await WaitForDeviceAsync(ct);
                 SetPhase(TransferPhase.Deleting, deleting);
-                Requeue(deletable, countAsError: true);
+                Requeue(deletable, countAsError: false);
+                continue;
+            }
+            catch (DeviceException e) when (++hiccups <= 3)
+            {
+                // Collegamento riaperto dal watchdog, risposta lenta, telefono appena bloccato: si aspetta e si riprova
+                // (revisione 17/10: prima il primo intoppo fermava tutta l'eliminazione). Al quarto ci si ferma.
+                _log?.Warn($"Cancellazione: {e.Message} (riprovo, {hiccups} di 3)");
+                await Task.Delay(_delays[Math.Min(hiccups - 1, _delays.Count - 1)], ct);
+                if (!await DevicePresentAsync(ct)) await WaitForDeviceAsync(ct);
+                SetPhase(TransferPhase.Deleting, deleting);
+                Requeue(deletable, countAsError: false);
                 continue;
             }
             catch (DeviceException e)
             {
-                // Il telefono non ha risposto alla cancellazione (WPD bloccato): riprovare vorrebbe dire minuti
-                // di attesa per niente. Ci si ferma e si dice come fare.
+                // Quattro intoppi di fila: insistere vorrebbe dire minuti di attesa per niente. Ci si ferma e si dice come fare.
                 _log?.Warn("Cancellazione interrotta: " + e.Message);
                 _report.DeleteProblem ??= "il telefono non ha risposto alla cancellazione: eliminale dall'app Foto (hanno il bollino ✓ PC)";
                 _report.DeleteFailed += deletable.Count + queue.Count;
@@ -730,6 +743,7 @@ public sealed class TransferEngine
             }
 
             var byId = results.GroupBy(r => r.ObjectId).ToDictionary(g => g.Key, g => g.Last());
+            if (results.Any(r => r.Ok || DeviceErrors.IsNotFound(r.HResult))) hiccups = 0;
 
             // iPhone bloccato: Windows non ne mostra le foto finché non si sblocca (il canale Apple sì, per questo
             // l'app le vede). Si aspetta lo sblocco senza contare errori, come per la copia.

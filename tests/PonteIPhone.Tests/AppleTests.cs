@@ -279,6 +279,56 @@ public sealed class AppleTests : IDisposable
     }
 
     [Fact]
+    public void ReopeningTheSamePhoneKeepsWhatWindowsAlreadyShowed()
+    {
+        // Revisione del 17/10: il motore riapre il telefono dopo ogni intoppo, e ogni volta si rileggeva tutto da Windows.
+        var fake = new FakeBackend();
+        var oct = new DateTime(2025, 10, 9, 10, 0, 0);
+        fake.Add("202510_a", "IMG_0002.JPG", _phone.Files["/DCIM/100APPLE/IMG_0002.JPG"].Length, oct);
+        fake.Add("202510_a", "IMG_0001.HEIC", _phone.Files["/DCIM/100APPLE/IMG_0001.HEIC"].Length, oct);
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => fake);
+        var id = AppleBackend.IdPrefix + FakeAppleDevice.Udid;
+        Assert.True(backend.Open(id).Ready);
+
+        Assert.True(Assert.Single(backend.Delete(["/DCIM/100APPLE/IMG_0002.JPG"])).Ok);
+        Assert.True(backend.Open(id).Ready);
+        Assert.True(Assert.Single(backend.Delete(["/DCIM/100APPLE/IMG_0001.HEIC"])).Ok);
+
+        Assert.Equal(["202510_a"], fake.FoldersRead); // letta una volta sola
+        Assert.Equal(["IMG_0002.JPG", "IMG_0001.HEIC"], fake.Deleted);
+    }
+
+    [Fact]
+    public void AFileAlreadyGoneFromThePhoneCountsAsDeleted()
+    {
+        // Un tentativo interrotto può aver già tolto il file: non deve risultare "non eliminato".
+        var fake = new FakeBackend();
+        fake.Add("202510_a", "IMG_0001.HEIC", 1000, new DateTime(2025, 10, 9, 10, 0, 0));
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => fake);
+        Assert.True(backend.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid).Ready);
+        _phone.Files.Remove("/DCIM/100APPLE/IMG_0002.JPG");
+
+        var result = Assert.Single(backend.Delete(["/DCIM/100APPLE/IMG_0002.JPG"]));
+
+        Assert.True(DeviceErrors.IsNotFound(result.HResult));
+        Assert.Empty(fake.Deleted);
+    }
+
+    [Fact]
+    public void OnlyTheMainFileTriggersAFullRead()
+    {
+        RemoteFile F(string name) => new("/DCIM/100APPLE/" + name, name, "100APPLE", 10, null, null, true);
+        var heic = F("IMG_0001.HEIC");
+        var mov = F("IMG_0001.MOV");
+        IReadOnlyList<RemoteFile> asked = [heic, mov, F("IMG_0001.AAE"), F("IMG_E0001.HEIC")];
+        Assert.True(SmartBackend.IsMainFile(heic, asked));
+        Assert.False(SmartBackend.IsMainFile(mov, asked));        // video della Live Photo
+        Assert.False(SmartBackend.IsMainFile(asked[2], asked));   // .AAE
+        Assert.False(SmartBackend.IsMainFile(asked[3], asked));   // versione modificata
+        Assert.True(SmartBackend.IsMainFile(F("IMG_0009.MOV"), asked)); // un video vero
+    }
+
+    [Fact]
     public void DeleteWaitsForWindowsToShowThePhotos()
     {
         // 17/10: dopo un avvio o un ricollegamento Windows mostra la memoria vuota per un po', poi le foto.

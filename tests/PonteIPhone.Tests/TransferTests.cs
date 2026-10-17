@@ -192,6 +192,35 @@ public sealed class TransferTests : IDisposable
     }
 
     [Fact]
+    public async Task DeleteGoesOnAfterAHiccup()
+    {
+        // Revisione del 17/10: un collegamento riaperto o una risposta lenta fermavano tutta l'eliminazione.
+        for (int i = 1; i <= 3; i++) _fake.Add("202610_a", $"IMG_000{i}.HEIC", 10_000, Oct);
+        _fake.FailNextDeletes = 2;
+        var items = await LoadAsync();
+
+        var report = await Engine().DeleteAsync(items, Options(), null, CancellationToken.None);
+
+        Assert.Equal(3, report.Deleted);
+        Assert.Equal(0, report.DeleteFailed);
+        Assert.Empty(_fake.Files);
+    }
+
+    [Fact]
+    public async Task DeleteStopsAfterTooManyHiccups()
+    {
+        _fake.Add("202610_a", "IMG_0001.HEIC", 10_000, Oct);
+        _fake.FailNextDeletes = 10;
+        var items = await LoadAsync();
+
+        var report = await Engine().DeleteAsync(items, Options(), null, CancellationToken.None);
+
+        Assert.Equal(0, report.Deleted);
+        Assert.Equal(1, report.DeleteFailed);
+        Assert.NotNull(report.DeleteProblem);
+    }
+
+    [Fact]
     public async Task DeleteOnlyRefusedStopsAtOnce()
     {
         for (int i = 1; i <= 4; i++) _fake.Add("202610_a", $"IMG_000{i}.HEIC", 10_000, Oct);

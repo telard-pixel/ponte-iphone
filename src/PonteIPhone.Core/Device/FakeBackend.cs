@@ -39,6 +39,8 @@ public sealed class FakeBackend : IDeviceBackend
     public int LockDuringDownloads;
     /// <summary>La prossima cancellazione trova l'iPhone appena bloccato: tutto "accesso negato".</summary>
     public bool LockOnNextDelete;
+    /// <summary>Le prossime N cancellazioni non rispondono (come il processo chiuso dal watchdog o un telefono lento).</summary>
+    public int FailNextDeletes;
     /// <summary>Il telefono rifiuta le cancellazioni (come potrebbe fare iOS).</summary>
     public bool RefuseDelete;
     /// <summary>Il telefono è bloccato: si vede ma la memoria è vuota.</summary>
@@ -180,6 +182,11 @@ public sealed class FakeBackend : IDeviceBackend
     public IReadOnlyList<DeleteResult> Delete(IReadOnlyList<string> objectIds)
     {
         EnsureReady();
+        if (FailNextDeletes > 0)
+        {
+            FailNextDeletes--;
+            throw new DeviceException("Il telefono non ha risposto", DeviceErrors.GenFailure);
+        }
         if (LockOnNextDelete)
         {
             LockOnNextDelete = false;

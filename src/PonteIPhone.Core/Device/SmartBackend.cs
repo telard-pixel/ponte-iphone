@@ -29,6 +29,12 @@ public sealed class SmartBackend : IDeviceBackend
     /// <summary>Cartelle WPD già lette in questo processo, e se si è già letto tutto il Rullino.</summary>
     private readonly HashSet<string> _wpdFoldersRead = new(StringComparer.OrdinalIgnoreCase);
     private bool _wpdWhole;
+    /// <summary>Lettura completa già tentata (riuscita o no) con questa sessione WPD: non si ripete per ogni file.</summary>
+    private bool _wpdWholeTried;
+    /// <summary>La sessione WPD va buttata alla prossima chiamata (iPhone scollegato, ID non più validi).</summary>
+    private bool _wpdStale;
+    /// <summary>Telefono aperto l'ultima volta: riaprire lo stesso non butta via quello che Windows ha già mostrato.</summary>
+    private string? _openedFor;
     private readonly Action<TimeSpan> _sleep;
     /// <summary>Quante volte riprovare, a 5 s l'una, se Windows mostra la memoria vuota.</summary>
     private const int WpdWaitAttempts = 18;
@@ -52,8 +58,11 @@ public sealed class SmartBackend : IDeviceBackend
 
     public OpenResult Open(string deviceId)
     {
-        // Telefono riaperto (o ricollegato): l'elenco WPD di prima può avere ID non più validi.
-        ForgetWpd();
+        // Revisione del 17/10: il motore riapre il telefono dopo ogni intoppo, e buttare ogni volta l'elenco di Windows
+        // voleva dire rileggere la memoria per minuti, finché lo schermo si bloccava e il collegamento cadeva.
+        // Si butta solo per un altro telefono o dopo uno scollegamento; un ID non più valido si scopre cancellando.
+        if (deviceId != _openedFor || _wpdStale) ForgetWpd();
+        _openedFor = deviceId;
         try
         {
             return _apple.Open(deviceId);
@@ -88,18 +97,38 @@ public sealed class SmartBackend : IDeviceBackend
 
     public IReadOnlyList<DeleteResult> Delete(IReadOnlyList<string> objectIds, Action<string?> step)
     {
+        try
+        {
+            return DeleteCore(objectIds, step);
+        }
+        catch (System.Runtime.InteropServices.COMException e)
+        {
+            // Un errore grezzo di Windows non deve uscire così: il motore lo tratterebbe come "fermati".
+            _wpdStale = true;
+            throw new DeviceException("Windows: " + e.Message, e.HResult, e);
+        }
+    }
+
+    private IReadOnlyList<DeleteResult> DeleteCore(IReadOnlyList<string> objectIds, Action<string?> step)
+    {
+        if (_wpdStale) ForgetWpd();
+        // Bloccato: si dice subito, prima di aprire Windows (il motore aspetta lo sblocco e riprova).
+        if (_apple.IsLocked() == true)
+            return objectIds.Select(id => new DeleteResult(id, false, DeviceErrors.LockedForDelete)).ToList();
+
         // In un processo nuovo (quello delle cancellazioni) l'elenco non c'è: si chiedono i dati al telefono.
+        // Un file che il canale Apple non trova più è già stato tolto (es. da un tentativo interrotto): conta come fatto.
         var files = new Dictionary<string, RemoteFile?>(StringComparer.Ordinal);
         foreach (var id in objectIds)
             if (!files.ContainsKey(id)) files[id] = _known.TryGetValue(id, out var k) ? k : _apple.Describe(id);
         var wanted = files.Values.OfType<RemoteFile>().ToList();
+        if (wanted.Count == 0)
+            return objectIds.Select(id => new DeleteResult(id, false, DeviceErrors.FileNotFound)).ToList();
 
         var map = WpdFiles(wanted, step);
-        // Il 15/10 l'eliminazione si fermava subito con "Windows non mostra le foto": il canale Apple legge anche
-        // col telefono bloccato, WPD no. Se è bloccato lo si dice (il motore aspetta lo sblocco e riprova);
-        // altrimenti si riprova un paio di volte, perché appena ricollegato Windows mostra la memoria con qualche secondo di ritardo.
         // Il 17/10 (1.0.54) Windows mostrava la memoria vuota per un po' dopo ogni avvio o ricollegamento, e alle 11:33,
-        // partendo più tardi, vedeva 2711 file: 8 secondi di attesa non bastavano. Ora fino a un minuto e mezzo, ogni 5 s, il tempo di sbloccare lo schermo.
+        // partendo più tardi, vedeva 2711 file: 8 secondi di attesa non bastavano. Ora fino a un minuto e mezzo, ogni 5 s,
+        // il tempo di sbloccare lo schermo.
         for (int attempt = 1; map is null && _wpdProblem == DeviceErrors.WpdUnavailable; attempt++)
         {
             if (_apple.IsLocked() == true)
@@ -121,32 +150,46 @@ public sealed class SmartBackend : IDeviceBackend
         var results = new List<DeleteResult>(objectIds.Count);
         foreach (var id in objectIds)
         {
-            var file = files[id];
-            var wpdId = file is null ? null : Match(map, file);
-            if (wpdId is not null && !_wpdWhole && !SameDay(map, wpdId, file!))
+            if (files[id] is not { } file)
             {
-                // Con solo alcune cartelle lette un omonimo di un altro mese non si vede: la data deve tornare.
-                wpdId = null;
+                results.Add(new DeleteResult(id, false, DeviceErrors.FileNotFound));
+                continue;
             }
-            if (wpdId is null && file is not null && !_wpdWhole)
+            var wpdId = Match(map, file);
+            // Non nelle cartelle del suo mese (la data del file può non essere quella dello scatto): tutto il resto,
+            // una volta sola e solo per il file principale. Il video di una Live Photo, la versione modificata e il .AAE
+            // spesso Windows non li mostra, o spariscono con la foto: per loro non vale la pena leggere minuti.
+            if (wpdId is null && !_wpdWholeTried && IsMainFile(file, wanted))
             {
-                // Non era nelle cartelle del suo mese (data cambiata, nomi di cartella diversi): si legge tutto, una volta sola.
                 try { ReadWholeWpd(map, step); }
-                catch (DeviceException e) { step("Windows: lettura completa non riuscita: " + e.Message); }
+                catch (DeviceException e) when (e.Kind != DeviceErrorKind.Gone) { step("Windows: lettura completa non riuscita: " + e.Message); }
                 wpdId = Match(map, file);
             }
             if (wpdId is null)
             {
+                if (_apple.Describe(id) is null)
+                {
+                    results.Add(new DeleteResult(id, false, DeviceErrors.FileNotFound)); // già tolto (iOS toglie il video Live con la foto)
+                    continue;
+                }
+                step(MissingNote(map, file));
                 results.Add(new DeleteResult(id, false, DeviceErrors.NoWpdMatch));
                 continue;
             }
             var r = Wpd.Delete([wpdId]).FirstOrDefault() ?? new DeleteResult(wpdId, false, DeviceErrors.GenFailure);
             step(null);
+            if (!r.Ok && DeviceErrors.Classify(r.HResult) == DeviceErrorKind.Gone)
+            {
+                // Scollegato: inutile provare gli altri. Al nuovo tentativo quelli già tolti risultano "non trovati".
+                _wpdStale = true;
+                throw new DeviceException("iPhone scollegato durante l'eliminazione", r.HResult);
+            }
             if (!r.Ok && DeviceErrors.IsNotFound(r.HResult) && _apple.Describe(id) is not null)
             {
                 // WPD dice "non trovato" ma il file è ancora sul telefono: ID vecchio, non una cancellazione riuscita.
+                // Si rilegge alla prossima chiamata, non a metà di questa.
                 r = r with { HResult = DeviceErrors.NoWpdMatch };
-                ForgetWpd();
+                _wpdStale = true;
             }
             else if (r.Ok || DeviceErrors.IsNotFound(r.HResult))
             {
@@ -157,6 +200,30 @@ public sealed class SmartBackend : IDeviceBackend
         return results;
     }
 
+    /// <summary>Il file che decide (la foto o il video), non il video Live, la versione modificata o il .AAE che l'accompagnano.</summary>
+    internal static bool IsMainFile(RemoteFile file, IReadOnlyList<RemoteFile> requested)
+    {
+        if (MediaGrouper.IsSidecar(file.Extension)) return false;
+        var baseName = Path.GetFileNameWithoutExtension(file.Name);
+        if (System.Text.RegularExpressions.Regex.IsMatch(baseName, @"^[A-Za-z]+_E\d")) return false;
+        if (MediaGrouper.IsVideo(file.Extension))
+            return !requested.Any(o => !ReferenceEquals(o, file) && MediaGrouper.IsImage(o.Extension)
+                && string.Equals(o.Folder, file.Folder, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(Path.GetFileNameWithoutExtension(o.Name), baseName, StringComparison.OrdinalIgnoreCase));
+        return true;
+    }
+
+    /// <summary>Per il registro: cosa mostra Windows con lo stesso nome (es. .JPG al posto di .HEIC con "Automatico").</summary>
+    private static string MissingNote(Dictionary<string, List<RemoteFile>> map, RemoteFile file)
+    {
+        var baseName = Path.GetFileNameWithoutExtension(file.Name);
+        var same = map.Values.SelectMany(l => l)
+            .Where(w => string.Equals(Path.GetFileNameWithoutExtension(w.Name), baseName, StringComparison.OrdinalIgnoreCase))
+            .Take(4).Select(w => $"{w.Name} {Transfer.TransferEngine.Format(w.Size)} in {w.Folder}").ToList();
+        return $"Windows: {file.Name} ({Transfer.TransferEngine.Format(file.Size)}, {file.Folder}) non trovato" +
+               (same.Count == 0 ? "; nessun file con lo stesso nome nelle cartelle lette" : "; con lo stesso nome: " + string.Join(", ", same));
+    }
+
     private void ForgetWpd()
     {
         _wpdFiles = null;
@@ -165,20 +232,13 @@ public sealed class SmartBackend : IDeviceBackend
         _wpdDetail = null;
         _wpdFoldersRead.Clear();
         _wpdWhole = false;
+        _wpdWholeTried = false;
+        _wpdStale = false;
     }
 
     private static void RemoveFromMap(Dictionary<string, List<RemoteFile>> map, string wpdId)
     {
         foreach (var list in map.Values) list.RemoveAll(f => f.ObjectId == wpdId);
-    }
-
-    /// <summary>Data di Windows e del canale Apple entro un giorno (fuso orario); senza una delle due non si scarta.</summary>
-    private static bool SameDay(Dictionary<string, List<RemoteFile>> map, string wpdId, RemoteFile file)
-    {
-        var w = map.Values.SelectMany(l => l).FirstOrDefault(f => f.ObjectId == wpdId);
-        var a = file.Created ?? file.Modified;
-        var b = w?.Created ?? w?.Modified;
-        return a is null || b is null || Math.Abs((a.Value - b.Value).TotalHours) <= 26;
     }
 
     private static void AddToMap(Dictionary<string, List<RemoteFile>> map, IReadOnlyList<RemoteFile> batch)
@@ -229,6 +289,7 @@ public sealed class SmartBackend : IDeviceBackend
                 _wpdFiles = new Dictionary<string, List<RemoteFile>>(StringComparer.OrdinalIgnoreCase);
                 _wpdFoldersRead.Clear();
                 _wpdWhole = false;
+                _wpdWholeTried = false;
             }
             catch (DeviceException e)
             {
@@ -242,7 +303,7 @@ public sealed class SmartBackend : IDeviceBackend
         {
             ReadWpdFolders(map, wanted, step);
             // Cartelle del mese trovate ma vuote: prima di dire "nessun file" si guarda tutto.
-            if (map.Count == 0 && !_wpdWhole) ReadWholeWpd(map, step);
+            if (map.Count == 0 && !_wpdWholeTried) ReadWholeWpd(map, step);
         }
         catch (DeviceException e)
         {
@@ -310,19 +371,24 @@ public sealed class SmartBackend : IDeviceBackend
         }
         if (read.Count > 0)
             step($"Windows: lette le cartelle {string.Join(", ", read)} ({count} file) in {clock.Elapsed.TotalSeconds:0.0} s");
+        // iOS può segnare dei file come non cancellabili (es. con Foto di iCloud): si annota, per capire un rifiuto.
+        int locked = map.Values.Sum(l => l.Count(f => !f.CanDelete));
+        if (locked > 0) step($"Windows: {locked} file segnati come non cancellabili nelle cartelle lette");
     }
 
     private void ReadWholeWpd(Dictionary<string, List<RemoteFile>> map, Action<string?> step)
     {
+        _wpdWholeTried = true;
         var clock = Stopwatch.StartNew();
         int count = 0;
-        // Tutte le cartelle, con le note di avanzamento (l'elenco normale non ne ha).
-        Wpd.EnumerateFolders(_ => true, batch =>
+        // Le cartelle non ancora lette, con le note di avanzamento (l'elenco normale non ne ha).
+        var read = Wpd.EnumerateFolders(name => !_wpdFoldersRead.Contains(name), batch =>
         {
             AddToMap(map, batch);
             count += batch.Count;
             step(null);
         }, CancellationToken.None, step);
+        foreach (var r in read) _wpdFoldersRead.Add(r);
         _wpdWhole = true;
         step($"Windows: letto tutto il Rullino ({count} file) in {clock.Elapsed.TotalSeconds:0.0} s");
     }

@@ -468,7 +468,8 @@ public sealed class WpdBackend : IDeviceBackend
                     bulk.Cancel(ref context);
                     callback.Done.Wait(TimeSpan.FromSeconds(5));
                     ct.ThrowIfCancellationRequested();
-                    return $"nessuna risposta da {lastNew.Elapsed.TotalSeconds:0} s";
+                    // Un telefono che tace in blocco tacerebbe anche uno per uno: si dice, invece di leggere per minuti.
+                    throw new DeviceException($"Windows non risponde da {lastNew.Elapsed.TotalSeconds:0} s", DeviceErrors.GenFailure);
                 }
                 if (lastNote.Elapsed > TimeSpan.FromSeconds(15))
                 {
@@ -529,6 +530,8 @@ public sealed class WpdBackend : IDeviceBackend
     private IPortableDeviceValues? ReadFileValues(string id)
     {
         int hr = Props.GetValues(id, _fileKeys, out var values);
+        // iPhone scollegato: va detto, non scambiato per "oggetto senza proprietà" (la memoria sembrerebbe vuota).
+        if (hr < 0 && DeviceErrors.Classify(hr) == DeviceErrorKind.Gone) throw new DeviceException("iPhone scollegato", hr);
         // Alcune proprietà possono mancare (hr positivo, S_FALSE): i valori presenti ci sono comunque.
         return hr < 0 ? null : values;
     }
