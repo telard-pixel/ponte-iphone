@@ -31,7 +31,7 @@ public sealed class SmartBackend : IDeviceBackend
     private bool _wpdWhole;
     private readonly Action<TimeSpan> _sleep;
     /// <summary>Quante volte riprovare, a 5 s l'una, se Windows mostra la memoria vuota.</summary>
-    private const int WpdWaitAttempts = 12;
+    private const int WpdWaitAttempts = 18;
 
     /// <param name="sleep">Attesa tra due tentativi WPD (nei test non aspetta).</param>
     public SmartBackend(AppleBackend apple, Func<IDeviceBackend> wpdFactory, Action<TimeSpan>? sleep = null)
@@ -99,7 +99,7 @@ public sealed class SmartBackend : IDeviceBackend
         // col telefono bloccato, WPD no. Se è bloccato lo si dice (il motore aspetta lo sblocco e riprova);
         // altrimenti si riprova un paio di volte, perché appena ricollegato Windows mostra la memoria con qualche secondo di ritardo.
         // Il 17/10 (1.0.54) Windows mostrava la memoria vuota per un po' dopo ogni avvio o ricollegamento, e alle 11:33,
-        // partendo più tardi, vedeva 2711 file: 8 secondi di attesa non bastavano. Ora fino a un minuto, ogni 5 s.
+        // partendo più tardi, vedeva 2711 file: 8 secondi di attesa non bastavano. Ora fino a un minuto e mezzo, ogni 5 s (c'è anche il tempo di riavviare il collegamento USB).
         for (int attempt = 1; map is null && _wpdProblem == DeviceErrors.WpdUnavailable; attempt++)
         {
             if (_apple.IsLocked() == true)
@@ -109,7 +109,7 @@ public sealed class SmartBackend : IDeviceBackend
             }
             if (attempt > WpdWaitAttempts) break;
             step(attempt == 1
-                ? "Windows mostra la memoria dell'iPhone vuota: aspetto che la prepari (fino a un minuto) [" + _wpdDetail + "]"
+                ? "Windows mostra la memoria dell'iPhone vuota: aspetto che la prepari (fino a un minuto e mezzo) [" + _wpdDetail + "]"
                 : null);
             _sleep(TimeSpan.FromSeconds(5));
             ForgetWpd();

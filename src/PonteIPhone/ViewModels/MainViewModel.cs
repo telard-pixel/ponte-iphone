@@ -1145,13 +1145,36 @@ public sealed partial class MainViewModel : ObservableObject
     private void TransferLog(string message)
     {
         _log.Info(message);
-        string? hint = message.StartsWith("Windows mostra la memoria dell'iPhone vuota", StringComparison.Ordinal)
-            ? "Windows non vede ancora le foto dell'iPhone. Tienilo sbloccato, poi scollega e ricollega il cavo: l'eliminazione riprende da sola."
-            : message.StartsWith("Windows: memoria pronta", StringComparison.Ordinal) ? null
-            : _wpdHint;
-        if (hint == _wpdHint) return;
-        _wpdHint = hint;
-        _dispatcher.BeginInvoke(() => { if (IsTransferring) TransferNotice = hint; });
+        if (message.StartsWith("Windows: memoria pronta", StringComparison.Ordinal)) SetWpdHint(null);
+        else if (message.StartsWith("Windows mostra la memoria dell'iPhone vuota", StringComparison.Ordinal))
+            _dispatcher.BeginInvoke(async () => await RestartUsbForDeleteAsync());
+    }
+
+    private bool _usbRestartTried;
+
+    /// <summary>
+    /// Windows vede la memoria vuota: invece di chiedere all'utente di staccare il cavo ("che senso ha", 17/10) l'app
+    /// fa riavviare a Windows il dispositivo USB dell'iPhone, una volta per eliminazione. Windows chiede il permesso.
+    /// </summary>
+    private async Task RestartUsbForDeleteAsync()
+    {
+        if (!IsTransferring || _usbRestartTried) return;
+        _usbRestartTried = true;
+        SetWpdHint("Windows non vede ancora le foto: riavvio il collegamento con l'iPhone. Se Windows chiede il permesso, premi Sì.");
+        var (result, detail) = await AppleUsbRestart.RestartAsync(Device?.Serial);
+        _log.Info($"Riavvio del collegamento USB per eliminare: {result} ({detail})");
+        SetWpdHint(result == AppleUsbRestart.Outcome.Restarted
+            ? "Collegamento riavviato: l'eliminazione riprende appena l'iPhone torna. Tienilo sbloccato."
+            : "Windows non vede ancora le foto dell'iPhone. Tienilo sbloccato, poi scollega e ricollega il cavo: l'eliminazione riprende da sola.");
+    }
+
+    private void SetWpdHint(string? hint)
+    {
+        _dispatcher.BeginInvoke(() =>
+        {
+            _wpdHint = hint;
+            if (IsTransferring) TransferNotice = hint;
+        });
     }
 
     partial void OnTransferNoticeChanged(string? value) => OnPropertyChanged(nameof(ShowTransferTip));
@@ -1270,6 +1293,7 @@ public sealed partial class MainViewModel : ObservableObject
         // Un collegamento tutto suo: le miniature e le anteprime non rallentano la copia (e viceversa).
         // (Nella dimostrazione il telefono finto è uno solo e non regge due thread: si usa lo stesso collegamento.)
         _wpdHint = null;
+        _usbRestartTried = false;
         IDeviceConnection conn = _demo
             ? _browse!
             : new WorkerConnection(new ProcessWorkerLauncher(Environment.ProcessPath!), log: TransferLog);
