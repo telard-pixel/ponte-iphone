@@ -31,7 +31,7 @@
                 </Grid.ColumnDefinitions>
                 <TextBlock Text="{Binding Title}" FontSize="16" FontWeight="SemiBold" VerticalAlignment="Bottom" />
                 <TextBlock Grid.Column="1" Text="{Binding Subtitle}" Style="{StaticResource Caption}" Margin="10,0,0,1" VerticalAlignment="Bottom" />
-                <Button Grid.Column="2" Style="{StaticResource LinkButton}" Content="Seleziona il mese" VerticalAlignment="Bottom"
+                <Button Grid.Column="2" Style="{StaticResource LinkButton}" Content="{Binding Action}" VerticalAlignment="Bottom"
                         Command="{Binding DataContext.SelectGroupCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                         CommandParameter="{Binding}" />
             </Grid>
@@ -47,7 +47,7 @@
                 </ItemsControl.ItemsPanel>
                 <ItemsControl.ItemTemplate>
                     <DataTemplate DataType="{x:Type vm:TileViewModel}">
-                        <Border x:Name="TileRoot" Margin="0,0,4,0" Cursor="Hand" ToolTip="{Binding Title}"
+                        <Border x:Name="TileRoot" Margin="0,0,4,0" Cursor="Hand" ToolTip="{Binding Title}" CornerRadius="4"
                                 Width="{Binding DataContext.TileWidth, RelativeSource={RelativeSource AncestorType=Window}}"
                                 Height="{Binding DataContext.TileWidth, RelativeSource={RelativeSource AncestorType=Window}}"
                                 Background="{DynamicResource ControlFillColorSecondaryBrush}"
@@ -79,6 +79,15 @@
                                 <Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="5" Background="#D91D7A3A" CornerRadius="3" Padding="5,1"
                                         Visibility="{Binding IsOnPc, Converter={StaticResource BoolToVis}}" ToolTip="Già copiato sul PC">
                                     <TextBlock Text="✓ PC" Foreground="White" FontSize="10" FontWeight="SemiBold" />
+                                </Border>
+                                <!-- Fai spazio: doppioni -->
+                                <Border HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="5,5,5,24" Background="#E61D7A3A" CornerRadius="3" Padding="6,1"
+                                        Visibility="{Binding IsDupKeep, Converter={StaticResource BoolToVis}}" ToolTip="Questa resta sull'iPhone">
+                                    <TextBlock Text="Resta" Foreground="White" FontSize="10" FontWeight="SemiBold" />
+                                </Border>
+                                <Border HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="5,5,5,24" Background="#E65B2A86" CornerRadius="3" Padding="6,1"
+                                        Visibility="{Binding IsDupCopy, Converter={StaticResource BoolToVis}}" ToolTip="Copia identica di un'altra foto: si può togliere">
+                                    <TextBlock Text="Copia" Foreground="White" FontSize="10" FontWeight="SemiBold" />
                                 </Border>
                             </Grid>
                         </Border>
@@ -225,13 +234,40 @@
                                     <TextBlock Text="Da copiare" />
                                 </DockPanel>
                             </RadioButton>
+                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding SetFilterCommand}" CommandParameter="OnPc"
+                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=OnPc}">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountOnPc, StringFormat=N0}" Style="{StaticResource Caption}" />
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE73E;" Margin="0,0,10,0" />
+                                    <TextBlock Text="Già sul PC" />
+                                </DockPanel>
+                            </RadioButton>
+                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding SetFilterCommand}" CommandParameter="Videos"
+                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=Videos}">
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CountVideos, StringFormat=N0}" Style="{StaticResource Caption}" />
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE714;" Margin="0,0,10,0" />
+                                    <TextBlock Text="Video" />
+                                </DockPanel>
+                            </RadioButton>
 
                             <TextBlock Text="IPHONE" Style="{StaticResource SectionLabel}" Margin="10,16,0,4" />
+                            <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding OpenCleanupCommand}"
+                                         IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=Cleanup}">
+                                <DockPanel>
+                                    <Border DockPanel.Dock="Right" CornerRadius="9" Padding="7,1" Background="{DynamicResource AccentFillColorDefaultBrush}"
+                                            Visibility="{Binding CleanupBadge, Converter={StaticResource NotNullToVis}}">
+                                        <TextBlock Text="{Binding CleanupBadge}" FontSize="11" Foreground="{DynamicResource TextOnAccentFillColorPrimaryBrush}" />
+                                    </Border>
+                                    <TextBlock Style="{StaticResource Icon}" Text="&#xE74D;" Margin="0,0,10,0" />
+                                    <TextBlock Text="Fai spazio" />
+                                </DockPanel>
+                            </RadioButton>
                             <RadioButton Style="{StaticResource NavItem}" GroupName="Nav" Command="{Binding OpenStorageCommand}"
                                          IsChecked="{Binding ActiveNav, Mode=OneWay, Converter={StaticResource EqualsToBool}, ConverterParameter=Storage}">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Style="{StaticResource Icon}" Text="&#xEDA2;" Margin="0,0,10,0" />
-                                    <TextBlock Text="Spazio" />
+                                    <TextBlock Text="Memoria" />
                                 </StackPanel>
                             </RadioButton>
                         </StackPanel>
@@ -310,7 +346,7 @@
                     <TextBlock Style="{StaticResource Icon}" Text="&#xE930;" FontSize="40" HorizontalAlignment="Center"
                                Foreground="{DynamicResource SystemFillColorSuccessBrush}" />
                     <TextBlock Text="Niente da mostrare qui" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,10,0,4" />
-                    <TextBlock Text="Con il filtro “Da copiare” vuoto, tutto è già sul PC." Style="{StaticResource Caption}" HorizontalAlignment="Center" />
+                    <TextBlock Text="{Binding FilteredEmptyText}" Style="{StaticResource Caption}" HorizontalAlignment="Center" TextWrapping="Wrap" MaxWidth="420" TextAlignment="Center" />
                 </StackPanel>
             </Grid>
 
@@ -539,6 +575,142 @@
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- ························ centro: fai spazio ························ -->
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"
+                          Visibility="{Binding IsCleanupOpen, Converter={StaticResource BoolToVis}}">
+                <StackPanel Margin="24,14,24,24" MaxWidth="980">
+                    <TextBlock Text="Fai spazio" Style="{StaticResource PageTitle}" />
+                    <TextBlock Style="{StaticResource Caption}" FontSize="13" Margin="0,2,0,14" TextWrapping="Wrap"
+                               Text="Cosa puoi togliere dall'iPhone senza perdere niente. Prima di eliminare, l'app chiede sempre conferma." />
+
+                    <!-- totale -->
+                    <Border CornerRadius="8" Padding="18,14" Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{DynamicResource AccentFillColorDefaultBrush}" BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock Text="Puoi liberare fino a" Style="{StaticResource Caption}" />
+                            <TextBlock Text="{Binding CleanupTotal}" FontSize="30" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding CleanupAfter}" Style="{StaticResource Caption}" Margin="0,0,0,10" />
+                            <Border CornerRadius="4" ClipToBounds="True" Height="10" Background="{DynamicResource ControlFillColorSecondaryBrush}">
+                                <ItemsControl ItemsSource="{Binding CleanupSlices}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <views:ProportionalPanel />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemContainerStyle>
+                                        <Style TargetType="ContentPresenter">
+                                            <Setter Property="views:ProportionalPanel.Weight" Value="{Binding Weight}" />
+                                        </Style>
+                                    </ItemsControl.ItemContainerStyle>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Background="{Binding Fill}" ToolTip="{Binding Tooltip}" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Border>
+                            <ItemsControl ItemsSource="{Binding CleanupSlices}" Margin="0,8,0,0">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,16,0">
+                                            <Border Width="9" Height="9" CornerRadius="2" Background="{Binding Fill}" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                            <TextBlock Text="{Binding Name}" Style="{StaticResource Caption}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+
+                    <UniformGrid Columns="2" Margin="-6,10,-6,0">
+                        <!-- già sul PC -->
+                        <Border Style="{StaticResource SettingCard}" Margin="6" Padding="16,14">
+                            <StackPanel>
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CleanOnPcSize}" FontWeight="SemiBold" />
+                                    <TextBlock Text="Già copiati sul PC" FontWeight="SemiBold" FontSize="15" />
+                                </DockPanel>
+                                <TextBlock Text="{Binding CleanOnPcText}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,8" />
+                                <TextBlock TextWrapping="Wrap" Text="Sono sul PC e la copia è stata verificata: toglierli dall'iPhone è sicuro. La conferma ricontrolla che i file siano ancora sul PC." />
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0" IsEnabled="{Binding HasCleanOnPc}">
+                                    <ui:Button Content="Guarda" Margin="0,0,8,0" Command="{Binding CleanupShowCommand}" CommandParameter="OnPc" />
+                                    <ui:Button Content="Elimina dall'iPhone…" Appearance="Primary" Command="{Binding CleanupDeleteOnPcCommand}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        <!-- doppioni -->
+                        <Border Style="{StaticResource SettingCard}" Margin="6" Padding="16,14">
+                            <StackPanel>
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding DupSize}" FontWeight="SemiBold" />
+                                    <TextBlock Text="Doppioni" FontWeight="SemiBold" FontSize="15" />
+                                </DockPanel>
+                                <TextBlock Text="{Binding DupText}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,8" />
+                                <TextBlock TextWrapping="Wrap" Text="Foto e video identici, controllati file per file. Ne resta sempre uno per gruppo." />
+                                <ProgressBar Height="4" Minimum="0" Maximum="1" Value="{Binding DupProgress, Mode=OneWay}" Margin="0,10,0,0"
+                                             Visibility="{Binding DupChecking, Converter={StaticResource BoolToVis}}" />
+                                <CheckBox Content="Tieni il più recente invece del più vecchio" Margin="0,8,0,0" IsChecked="{Binding DupKeepNewest}"
+                                          Visibility="{Binding HasDups, Converter={StaticResource BoolToVis}}" />
+                                <WrapPanel Margin="0,10,0,0">
+                                    <ui:Button Content="Cerca i doppioni" Appearance="Primary" Margin="0,0,8,0" Command="{Binding CheckDuplicatesCommand}"
+                                               Visibility="{Binding ShowCleanupStart, Converter={StaticResource BoolToVis}}" />
+                                    <ui:Button Content="Interrompi" Margin="0,0,8,0" Command="{Binding CancelDuplicatesCommand}"
+                                               Visibility="{Binding DupChecking, Converter={StaticResource BoolToVis}}" />
+                                    <StackPanel Orientation="Horizontal" Visibility="{Binding HasDups, Converter={StaticResource BoolToVis}}">
+                                        <ui:Button Content="Rivedi i doppioni" Margin="0,0,8,0" Command="{Binding CleanupReviewDupsCommand}" />
+                                        <ui:Button Content="Togli le copie…" Appearance="Primary" Command="{Binding CleanupDeleteDupsCommand}" />
+                                    </StackPanel>
+                                    <ui:Button Content="Ricontrolla" Command="{Binding CheckDuplicatesCommand}"
+                                               Visibility="{Binding DupChecked, Converter={StaticResource BoolToVis}}" />
+                                </WrapPanel>
+                            </StackPanel>
+                        </Border>
+                        <!-- video grandi -->
+                        <Border Style="{StaticResource SettingCard}" Margin="6" Padding="16,14">
+                            <StackPanel>
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CleanVideosSize}" FontWeight="SemiBold" />
+                                    <TextBlock Text="Video grandi" FontWeight="SemiBold" FontSize="15" />
+                                </DockPanel>
+                                <TextBlock Text="{Binding CleanVideosText}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,8" />
+                                <TextBlock TextWrapping="Wrap" Text="Dal più grande al più piccolo. Per non perderli, spostali sul PC con Sposta: li copia e poi li toglie." />
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0" IsEnabled="{Binding HasCleanVideos}">
+                                    <ui:Button Content="Guarda i video" Command="{Binding CleanupShowCommand}" CommandParameter="BigVideos" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        <!-- schermate -->
+                        <Border Style="{StaticResource SettingCard}" Margin="6" Padding="16,14">
+                            <StackPanel>
+                                <DockPanel>
+                                    <TextBlock DockPanel.Dock="Right" Text="{Binding CleanScreensSize}" FontWeight="SemiBold" />
+                                    <TextBlock Text="Schermate" FontWeight="SemiBold" FontSize="15" />
+                                </DockPanel>
+                                <TextBlock Text="{Binding CleanScreensText}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,2,0,8" />
+                                <TextBlock TextWrapping="Wrap" Text="Spesso servono solo per un momento. Scegli tu quali togliere." />
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0" IsEnabled="{Binding HasCleanScreens}">
+                                    <ui:Button Content="Scegli" Command="{Binding CleanupShowCommand}" CommandParameter="Screenshots" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+
+                    <Border Style="{StaticResource SettingCard}" Margin="0,10,0,0" Padding="16,12">
+                        <StackPanel>
+                            <TextBlock Text="Il resto della memoria" FontWeight="SemiBold" />
+                            <TextBlock TextWrapping="Wrap" Style="{StaticResource Caption}" FontSize="13" Margin="0,4,0,0"
+                                       Text="App e dati delle app si liberano solo dall'iPhone: Impostazioni › Generali › Spazio iPhone › tocca un'app › Rimuovi app (tiene i dati) o Elimina app." />
+                            <TextBlock TextWrapping="Wrap" Style="{StaticResource Caption}" FontSize="13" Margin="0,4,0,0" Text="{Binding CleanupAppsText}" />
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
 

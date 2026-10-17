@@ -30,7 +30,7 @@ public enum AppScreen
     Library,
 }
 
-public enum LibraryFilter { All, Photos, Live, Videos, Screenshots, NotCopied }
+public enum LibraryFilter { All, Photos, Live, Videos, Screenshots, NotCopied, OnPc, BigVideos, Duplicates }
 
 /// <summary>Perché il telefono collegato non mostra ancora le foto: decide titolo e testo della schermata.</summary>
 public enum PhoneWait { Locked, NotTrusted, Denied, Connecting }
@@ -111,7 +111,7 @@ public sealed partial class MainViewModel : ObservableObject
 
     public bool HasDevice => Device is not null && Screen is AppScreen.Library or AppScreen.Loading;
     /// <summary>Una pagina (Impostazioni o Spazio) copre la schermata del telefono.</summary>
-    public bool IsPageOpen => IsSettingsOpen || IsStorageOpen;
+    public bool IsPageOpen => IsSettingsOpen || IsStorageOpen || IsCleanupOpen;
     public bool ShowNoDevice => !IsPageOpen && Screen == AppScreen.NoDevice;
     public bool ShowLocked => !IsPageOpen && Screen == AppScreen.Locked;
     public bool ShowNoCameraRoll => !IsPageOpen && Screen == AppScreen.NoCameraRoll;
@@ -120,22 +120,23 @@ public sealed partial class MainViewModel : ObservableObject
     public bool ShowBottomBar => ShowLibrary || IsTransferring;
     public bool ShowActions => ShowLibrary && !IsTransferring;
     /// <summary>Voce attiva della barra laterale ("Settings" o il nome del filtro).</summary>
-    public string ActiveNav => IsSettingsOpen ? "Settings" : IsStorageOpen ? "Storage" : Filter.ToString();
+    public string ActiveNav => IsSettingsOpen ? "Settings" : IsStorageOpen ? "Storage" : IsCleanupOpen ? "Cleanup"
+        : Filter is LibraryFilter.BigVideos or LibraryFilter.Duplicates ? "Cleanup" : Filter.ToString();
 
     partial void OnScreenChanged(AppScreen value)
     {
         // La pagina dello spazio è del telefono aperto: se il telefono va via, si chiude.
-        if (value is not (AppScreen.Library or AppScreen.Loading)) IsStorageOpen = false;
+        if (value is not (AppScreen.Library or AppScreen.Loading)) { IsStorageOpen = false; IsCleanupOpen = false; }
         RaiseScreen();
     }
     partial void OnIsSettingsOpenChanged(bool value)
     {
-        if (value) IsStorageOpen = false;
+        if (value) { IsStorageOpen = false; IsCleanupOpen = false; }
         RaiseScreen();
     }
     partial void OnIsStorageOpenChanged(bool value)
     {
-        if (value) IsSettingsOpen = false;
+        if (value) { IsSettingsOpen = false; IsCleanupOpen = false; }
         RaiseScreen();
     }
 
@@ -604,6 +605,7 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty] private int _countVideos;
     [ObservableProperty] private int _countScreenshots;
     [ObservableProperty] private int _countNotCopied;
+    [ObservableProperty] private int _countOnPc;
     [ObservableProperty] private string _libraryTitle = "Foto e video";
     [ObservableProperty] private string _librarySubtitle = "";
 
@@ -616,10 +618,14 @@ public sealed partial class MainViewModel : ObservableObject
             LibraryFilter.Videos => "Video",
             LibraryFilter.Screenshots => "Screenshot",
             LibraryFilter.NotCopied => "Da copiare",
+            LibraryFilter.OnPc => "Già sul PC",
+            LibraryFilter.BigVideos => "Video grandi",
+            LibraryFilter.Duplicates => "Doppioni",
             _ => "Foto e video",
         };
         IsSettingsOpen = false;
         IsStorageOpen = false;
+        IsCleanupOpen = false;
         OnPropertyChanged(nameof(ActiveNav));
         BuildRows();
     }
@@ -629,7 +635,7 @@ public sealed partial class MainViewModel : ObservableObject
     {
         if (Enum.TryParse<LibraryFilter>(name, out var f))
         {
-            if (f == Filter) { IsSettingsOpen = false; IsStorageOpen = false; return; }
+            if (f == Filter) { IsSettingsOpen = false; IsStorageOpen = false; IsCleanupOpen = false; return; }
             Filter = f;
         }
     }
@@ -684,6 +690,7 @@ public sealed partial class MainViewModel : ObservableObject
             t.IsOnPc = IsOnPc(item);
         }
         foreach (var k in _tiles.Keys.Where(k => !live.Contains(k)).ToList()) _tiles.Remove(k);
+        RefreshDupsAfterList();
         UpdateCounts();
         BuildRows();
         UpdateSelection();
@@ -696,6 +703,9 @@ public sealed partial class MainViewModel : ObservableObject
         LibraryFilter.Videos => i.Kind == MediaKind.Video,
         LibraryFilter.Screenshots => i.Kind == MediaKind.Screenshot,
         LibraryFilter.NotCopied => !_tiles[i.Id].IsOnPc,
+        LibraryFilter.OnPc => _tiles[i.Id].IsOnPc,
+        LibraryFilter.BigVideos => i.Kind == MediaKind.Video && i.TotalSize >= BigVideoBytes,
+        LibraryFilter.Duplicates => _tiles[i.Id].DupRole != DupRole.None,
         _ => true,
     };
 
@@ -707,38 +717,97 @@ public sealed partial class MainViewModel : ObservableObject
         CountVideos = _items.Count(i => i.Kind == MediaKind.Video);
         CountScreenshots = _items.Count(i => i.Kind == MediaKind.Screenshot);
         CountNotCopied = _items.Count(i => _tiles.TryGetValue(i.Id, out var t) && !t.IsOnPc);
+        CountOnPc = _items.Count - CountNotCopied;
         UpdateSidebarSummary();
+        RecomputeCleanup();
     }
 
     private void BuildRows()
     {
         UpdateTileWidth();
         var ordered = _items.Where(Passes);
-        ordered = NewestFirst
-            ? ordered.OrderByDescending(i => i.Date ?? DateTime.MinValue)
+        ordered = Filter == LibraryFilter.BigVideos ? ordered.OrderByDescending(i => i.TotalSize)
+            : NewestFirst ? ordered.OrderByDescending(i => i.Date ?? DateTime.MinValue)
             : ordered.OrderBy(i => i.Date ?? DateTime.MaxValue);
         var list = ordered.Select(i => _tiles[i.Id]).ToList();
-        _visibleOrder = list;
 
         var rows = new List<object>();
         int columns = Columns;
-        foreach (var month in list.GroupBy(t => t.Item.Date is { } d ? new DateTime(d.Year, d.Month, 1) : DateTime.MinValue))
+        void Add(string title, string subtitle, List<TileViewModel> tiles, string action = "Seleziona")
         {
-            var tiles = month.ToList();
-            var title = month.Key == DateTime.MinValue ? "Senza data"
-                : It.TextInfo.ToTitleCase(month.Key.ToString("MMMM yyyy", It));
-            int todo = tiles.Count(t => !t.IsOnPc);
-            var subtitle = $"{tiles.Count.ToString("N0", It)} elementi" +
-                           (todo == 0 ? " · tutto già sul PC" : todo < tiles.Count ? $" · {todo.ToString("N0", It)} da copiare" : "");
-            rows.Add(new HeaderRow(title, subtitle, tiles));
+            rows.Add(new HeaderRow(title, subtitle, tiles, action));
             for (int i = 0; i < tiles.Count; i += columns)
                 rows.Add(new TileRow(tiles.Skip(i).Take(columns).ToList()));
         }
 
+        if (Filter == LibraryFilter.Duplicates)
+        {
+            // Un gruppo per riga d'intestazione: prima quella che resta, poi le copie.
+            var visible = list.ToHashSet();
+            list = [];
+            foreach (var g in _dupGroups)
+            {
+                var tiles = g.Copies.Prepend(g.Keep).Select(i => _tiles.GetValueOrDefault(i.Id)).OfType<TileViewModel>().Where(visible.Contains).ToList();
+                if (tiles.Count < 2) continue;
+                list.AddRange(tiles);
+                Add($"{g.Keep.BaseName}.{g.Keep.Primary.Extension}",
+                    $"{tiles.Count} copie identiche · liberi {TransferEngine.Format(g.Saving)} · resta quella con il bollino Resta", tiles, "Seleziona il gruppo");
+            }
+        }
+        else if (Filter == LibraryFilter.BigVideos)
+        {
+            if (list.Count > 0)
+                Add("Dal più grande", $"{list.Count.ToString("N0", It)} video · {TransferEngine.Format(list.Sum(t => t.Item.TotalSize))} · spostali sul PC prima di toglierli", list, "Seleziona tutti");
+        }
+        else
+        {
+            // Gli ultimi sette giorni uno per uno (Oggi, Ieri, mercoledì 15 ottobre), poi per mese.
+            var today = DateTime.Today;
+            foreach (var group in list.GroupBy(t => GroupKey(t.Item.Date, today)))
+            {
+                var tiles = group.ToList();
+                int todo = tiles.Count(t => !t.IsOnPc);
+                var subtitle = $"{tiles.Count.ToString("N0", It)} elementi" +
+                               (todo == 0 ? " · tutto già sul PC" : todo < tiles.Count ? $" · {todo.ToString("N0", It)} da copiare" : "");
+                Add(GroupTitle(group.Key, today), subtitle, tiles, group.Key.IsDay ? "Seleziona il giorno" : "Seleziona il mese");
+            }
+        }
+        _visibleOrder = list;
+
         Rows.Clear();
         foreach (var r in rows) Rows.Add(r);
-        LibrarySubtitle = $"{list.Count.ToString("N0", It)} elementi";
+        LibrarySubtitle = $"{list.Count.ToString("N0", It)} elementi · {TransferEngine.Format(list.Sum(t => t.Item.TotalSize))}";
         OnPropertyChanged(nameof(IsFilteredEmpty));
+        OnPropertyChanged(nameof(FilteredEmptyText));
+        OnPropertyChanged(nameof(ActiveNav));
+    }
+
+    public string FilteredEmptyText => Filter switch
+    {
+        LibraryFilter.NotCopied => "Con “Da copiare” vuoto, tutto è già sul PC.",
+        LibraryFilter.OnPc => "Nessuna foto è ancora sul PC: usa Copia o Sposta.",
+        LibraryFilter.BigVideos => "Nessun video sopra i 100 MB.",
+        LibraryFilter.Duplicates => "Nessun doppione da mostrare: cercali dalla pagina Fai spazio.",
+        _ => "Nessun elemento di questo tipo sull'iPhone.",
+    };
+
+    private readonly record struct DateGroup(DateTime Start, bool IsDay);
+
+    private static DateGroup GroupKey(DateTime? date, DateTime today)
+    {
+        if (date is not { } d) return new DateGroup(DateTime.MinValue, false);
+        var day = d.Date;
+        return day <= today && (today - day).TotalDays < 7 ? new DateGroup(day, true) : new DateGroup(new DateTime(d.Year, d.Month, 1), false);
+    }
+
+    private static string GroupTitle(DateGroup g, DateTime today)
+    {
+        if (g.Start == DateTime.MinValue) return "Senza data";
+        if (!g.IsDay) return It.TextInfo.ToTitleCase(g.Start.ToString("MMMM yyyy", It));
+        if (g.Start == today) return "Oggi";
+        if (g.Start == today.AddDays(-1)) return "Ieri";
+        var text = g.Start.ToString("dddd d MMMM", It);
+        return char.ToUpper(text[0], It) + text[1..];
     }
 
     public bool IsFilteredEmpty => Screen == AppScreen.Library && _visibleOrder.Count == 0;
@@ -1120,10 +1189,15 @@ public sealed partial class MainViewModel : ObservableObject
         // Controllo sul disco adesso, non il bollino: il file sul PC può essere stato cancellato o spostato
         // dopo l'apertura. E contano tutti i file che Elimina toglie, versione modificata compresa.
         foreach (var t in sel) t.IsOnPc = FullyOnPcNow(t.Item);
-        int notOnPc = sel.Count(t => !t.IsOnPc);
+        // Una copia di un doppione non si perde: sull'iPhone resta quella identica (se non è anche lei tra le scelte).
+        var selectedIds = sel.Select(t => t.Item.Id).ToHashSet(StringComparer.Ordinal);
+        int safeCopies = sel.Count(t => !t.IsOnPc && IsSafeDuplicateCopy(t, selectedIds));
+        int notOnPc = sel.Count(t => !t.IsOnPc) - safeCopies;
         ConfirmDeleteTitle = sel.Count == 1 ? "Eliminare 1 elemento dall'iPhone?" : $"Eliminare {sel.Count.ToString("N0", It)} elementi dall'iPhone?";
         ConfirmDeleteText = $"{sel.Sum(t => t.Item.Files.Count).ToString("N0", It)} file ({TransferEngine.Format(sel.Sum(t => t.Item.TotalSize))}) " +
                             "vengono tolti dal telefono, senza copiarli. Non è detto che passino da “Eliminati di recente”: considerala un'eliminazione definitiva.";
+        if (safeCopies > 0)
+            ConfirmDeleteText += $" {safeCopies.ToString("N0", It)} sono doppioni: sull'iPhone resta una copia identica di ognuno.";
         ConfirmDeleteNotOnPc = notOnPc == 0 ? null
             : notOnPc == sel.Count ? (sel.Count == 1 ? "Questo elemento NON è sul PC: se lo elimini, lo perdi." : "Nessuno di questi è sul PC: se li elimini, li perdi.")
             : $"{notOnPc.ToString("N0", It)} di questi NON sono sul PC: se li elimini, li perdi. Per tenerli usa Sposta.";

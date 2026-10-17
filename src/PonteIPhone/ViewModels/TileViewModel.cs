@@ -24,6 +24,14 @@ public sealed partial class TileViewModel : ObservableObject
     [ObservableProperty] private bool _isOnPc;
     [ObservableProperty] private bool _isFocused;
 
+    /// <summary>Fai spazio: questa miniatura resta (doppione tenuto) o è una copia identica da togliere.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsDupKeep), nameof(IsDupCopy))]
+    private DupRole _dupRole;
+
+    public bool IsDupKeep => DupRole == DupRole.Keep;
+    public bool IsDupCopy => DupRole == DupRole.Copy;
+
     /// <summary>Il telefono non ha una miniatura per questo file: si mostra l'icona del tipo.</summary>
     [ObservableProperty] private bool _hasNoThumbnail;
 
@@ -107,10 +115,14 @@ public sealed partial class TileViewModel : ObservableObject
 
 public sealed record FileLine(string Name, string Size, string Role);
 
+public enum DupRole { None, Keep, Copy }
+
 /// <summary>Intestazione di un mese nella griglia.</summary>
-public sealed class HeaderRow(string title, string subtitle, IReadOnlyList<TileViewModel> tiles)
+public sealed class HeaderRow(string title, string subtitle, IReadOnlyList<TileViewModel> tiles, string action = "Seleziona")
 {
     public string Title { get; } = title;
+    /// <summary>Testo del pulsante che seleziona il gruppo (il giorno, il mese, i doppioni).</summary>
+    public string Action { get; } = action;
     public string Subtitle { get; } = subtitle;
     public IReadOnlyList<TileViewModel> Tiles { get; } = tiles;
 }
