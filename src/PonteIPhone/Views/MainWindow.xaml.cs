@@ -48,8 +48,12 @@ public partial class MainWindow : FluentWindow
         finally
         {
             _closed = true;
-            // Con Application.Shutdown (aggiornamento) la finestra si chiude comunque: non richiuderla.
-            if (PresentationSource.FromVisual(this) is not null) Close();
+            // Dopo, non dentro questo evento: se la chiusura finisce subito si è ancora dentro Closing, e WPF non permette
+            // di richiudere da lì (17/10, 1.0.54). Con Application.Shutdown (aggiornamento) la finestra si chiude comunque.
+            _ = Dispatcher.BeginInvoke(() =>
+            {
+                if (PresentationSource.FromVisual(this) is not null) Close();
+            });
         }
     }
 
