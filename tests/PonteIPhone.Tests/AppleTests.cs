@@ -252,7 +252,7 @@ public sealed class AppleTests : IDisposable
 
         Assert.Equal(1, report.Deleted);
         Assert.Equal(["IMG_0002.JPG"], fake.Deleted);
-        Assert.Equal(1, fake.FullEnumerations); // nessuna cartella del suo mese: tutto il Rullino, una volta
+        Assert.Equal(["202610_a"], fake.FoldersRead); // nessuna cartella del suo mese: tutte le cartelle, una volta
     }
 
     [Fact]

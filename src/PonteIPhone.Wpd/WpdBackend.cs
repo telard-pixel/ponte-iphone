@@ -241,7 +241,7 @@ public sealed class WpdBackend : IDeviceBackend
                  {
                      WpdApi.ObjectName, WpdApi.ObjectOriginalFileName, WpdApi.ObjectContentType, WpdApi.ObjectSize,
                      WpdApi.ObjectDateCreated, WpdApi.ObjectDateModified, WpdApi.ObjectDateAuthored, WpdApi.ObjectCanDelete,
-                     WpdApi.ObjectPersistentUniqueId,
+                     WpdApi.ObjectPersistentUniqueId, WpdApi.ObjectId,
                  })
         {
             var key = k;
@@ -265,7 +265,8 @@ public sealed class WpdBackend : IDeviceBackend
     /// tutto il Rullino da Windows richiede minuti (16/10: 3085 file, collegamento chiuso dopo 94 s senza risposta).
     /// Con tutta la memoria al posto di DCIM non si sa dove guardare, e si legge tutto.
     /// </summary>
-    public IReadOnlyList<string> EnumerateFolders(Func<string, bool> wanted, Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
+    public IReadOnlyList<string> EnumerateFolders(Func<string, bool> wanted, Action<IReadOnlyList<RemoteFile>> batch,
+        CancellationToken ct, Action<string?>? step = null)
     {
         var dcim = _dcimId ?? throw new DeviceException("iPhone non aperto o senza Rullino", DeviceErrors.WpdDeviceNotOpen);
         if (_wholeStorage)
@@ -273,27 +274,31 @@ public sealed class WpdBackend : IDeviceBackend
             Enumerate(batch, ct);
             return ["*"];
         }
-        var read = new List<string>();
-        var buffer = new List<RemoteFile>(256);
-        foreach (var id in Children(dcim))
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var children = Children(dcim);
+        var folders = new List<(string Id, string Name)>();
+        foreach (var v in ReadMany(children, "DCIM", step, ct))
         {
-            ct.ThrowIfCancellationRequested();
-            var v = ReadFileValues(id);
-            if (v is null) continue;
-            string name;
-            bool isFolder;
             try
             {
-                name = GetString(v, WpdApi.ObjectOriginalFileName) is { Length: > 0 } o ? o : GetString(v, WpdApi.ObjectName);
-                isFolder = GetGuid(v, WpdApi.ObjectContentType) == WpdApi.ContentTypeFolder;
+                if (GetGuid(v, WpdApi.ObjectContentType) != WpdApi.ContentTypeFolder) continue;
+                folders.Add((GetString(v, WpdApi.ObjectId), NameOf(v)));
             }
             finally
             {
                 Release(v);
             }
-            if (!isFolder || !wanted(name)) continue;
+        }
+        step?.Invoke($"Windows: DCIM ha {folders.Count} cartelle ({string.Join(", ", folders.Take(12).Select(f => f.Name))}" +
+                     $"{(folders.Count > 12 ? ", …" : "")}) in {clock.Elapsed.TotalSeconds:0.0} s");
+        var read = new List<string>();
+        var buffer = new List<RemoteFile>(256);
+        foreach (var (id, name) in folders)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!wanted(name)) continue;
             read.Add(name);
-            Walk(id, name, 1, buffer, batch, ct);
+            Walk(id, name, 1, buffer, batch, ct, step);
             // Un blocco per cartella, anche vuoto: è il segno di vita per chi aspetta.
             batch(buffer.ToList());
             buffer.Clear();
@@ -301,23 +306,25 @@ public sealed class WpdBackend : IDeviceBackend
         return read;
     }
 
+    private static string NameOf(IPortableDeviceValues v) =>
+        GetString(v, WpdApi.ObjectOriginalFileName) is { Length: > 0 } o ? o : GetString(v, WpdApi.ObjectName);
+
     private void Walk(string folderId, string folderPath, int depth, List<RemoteFile> buffer,
-        Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
+        Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct, Action<string?>? step = null)
     {
-        foreach (var id in Children(folderId))
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var children = Children(folderId);
+        step?.Invoke($"Windows: cartella {(folderPath.Length == 0 ? "DCIM" : folderPath)}, {children.Count} oggetti");
+        var subfolders = new List<(string Id, string Name)>();
+        int files = 0;
+        foreach (var v in ReadMany(children, folderPath, step, ct))
         {
-            ct.ThrowIfCancellationRequested();
-            var v = ReadFileValues(id);
-            if (v is null) continue;
             try
             {
-                var name = GetString(v, WpdApi.ObjectOriginalFileName) is { Length: > 0 } o ? o : GetString(v, WpdApi.ObjectName);
-                var isFolder = GetGuid(v, WpdApi.ObjectContentType) == WpdApi.ContentTypeFolder;
-                if (isFolder)
+                var name = NameOf(v);
+                if (GetGuid(v, WpdApi.ObjectContentType) == WpdApi.ContentTypeFolder)
                 {
-                    // Sugli iPhone le foto stanno un livello sotto DCIM (100APPLE, 202601_a…).
-                    if (depth < (_wholeStorage ? 5 : 3))
-                        Walk(id, folderPath.Length == 0 ? name : folderPath + "/" + name, depth + 1, buffer, batch, ct);
+                    subfolders.Add((GetString(v, WpdApi.ObjectId), name));
                     continue;
                 }
                 var ext = Path.GetExtension(name).TrimStart('.');
@@ -325,19 +332,177 @@ public sealed class WpdBackend : IDeviceBackend
                 var created = GetDate(v, WpdApi.ObjectDateAuthored) ?? GetDate(v, WpdApi.ObjectDateCreated);
                 var modified = GetDate(v, WpdApi.ObjectDateModified);
                 bool canDelete = !HasValue(v, WpdApi.ObjectCanDelete) || GetBool(v, WpdApi.ObjectCanDelete);
-                buffer.Add(new RemoteFile(id, name, folderPath, (long)GetULong(v, WpdApi.ObjectSize), created, modified, canDelete,
-                    GetString(v, WpdApi.ObjectPersistentUniqueId)));
+                buffer.Add(new RemoteFile(GetString(v, WpdApi.ObjectId), name, folderPath, (long)GetULong(v, WpdApi.ObjectSize),
+                    created, modified, canDelete, GetString(v, WpdApi.ObjectPersistentUniqueId)));
+                files++;
             }
             finally
             {
                 Release(v);
             }
-            // Blocchi piccoli: ognuno è un segno di vita, e Windows sull'iPhone legge pochi file al secondo.
+            // Blocchi piccoli: ognuno è un segno di vita.
             if (buffer.Count >= 50)
             {
                 batch(buffer.ToList());
                 buffer.Clear();
             }
+        }
+        if (folderPath.Length > 0)
+            step?.Invoke($"Windows: cartella {folderPath} letta, {files} file in {clock.Elapsed.TotalSeconds:0.0} s");
+        foreach (var (id, name) in subfolders)
+        {
+            // Sugli iPhone le foto stanno un livello sotto DCIM (100APPLE, 202601_a…).
+            if (depth < (_wholeStorage ? 5 : 3))
+                Walk(id, folderPath.Length == 0 ? name : folderPath + "/" + name, depth + 1, buffer, batch, ct, step);
+        }
+    }
+
+    /// <summary>Quanto aspettare Windows senza nessun risultato nuovo prima di arrendersi.</summary>
+    private static readonly TimeSpan BulkSilence = TimeSpan.FromSeconds(75);
+
+    /// <summary>
+    /// Le proprietà di <paramref name="ids"/>, ognuna con il suo ID dentro (WPD_OBJECT_ID). Prima con una richiesta
+    /// sola per tutti (IPortableDevicePropertiesBulk, come Esplora file): chiedere un file per volta all'iPhone
+    /// costa un giro col telefono a file, e il 17/10 con 1.0.50 dopo 10 minuti l'eliminazione non era ancora partita.
+    /// Se Windows non la offre o non risponde, un file per volta. Chi riceve i valori li rilascia.
+    /// </summary>
+    private List<IPortableDeviceValues> ReadMany(IReadOnlyList<string> ids, string label, Action<string?>? step, CancellationToken ct)
+    {
+        var result = new List<IPortableDeviceValues>(ids.Count);
+        if (ids.Count == 0) return result;
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var got = new HashSet<string>(StringComparer.Ordinal);
+        string? bulkProblem = null;
+        try
+        {
+            bulkProblem = ReadBulk(ids, result, got, step, ct);
+        }
+        catch (Exception e) when (e is COMException or InvalidCastException)
+        {
+            bulkProblem = e.Message;
+        }
+        if (bulkProblem is null && got.Count >= ids.Count) return result;
+
+        var missing = ids.Where(id => !got.Contains(id)).ToList();
+        step?.Invoke($"Windows: lettura in blocco di {(label.Length == 0 ? "DCIM" : label)} " +
+                     $"{(bulkProblem is null ? $"incompleta ({got.Count} di {ids.Count})" : "non disponibile: " + bulkProblem)}, " +
+                     $"leggo {missing.Count} oggetti uno per uno");
+        var last = System.Diagnostics.Stopwatch.StartNew();
+        int done = 0;
+        foreach (var id in missing)
+        {
+            ct.ThrowIfCancellationRequested();
+            var v = ReadFileValues(id);
+            done++;
+            if (v is not null)
+            {
+                // L'ID non sempre torna tra i valori letti uno per uno: lo si mette.
+                var key = WpdApi.ObjectId;
+                v.SetStringValue(ref key, id);
+                result.Add(v);
+            }
+            if (last.Elapsed > TimeSpan.FromSeconds(15))
+            {
+                step?.Invoke($"Windows: letti {done} di {missing.Count} uno per uno in {clock.Elapsed.TotalSeconds:0} s");
+                last.Restart();
+            }
+            else step?.Invoke(null);
+        }
+        return result;
+    }
+
+    /// <summary>La lettura in blocco; null se è andata, altrimenti il perché.</summary>
+    private string? ReadBulk(IReadOnlyList<string> ids, List<IPortableDeviceValues> result, HashSet<string> got,
+        Action<string?>? step, CancellationToken ct)
+    {
+        if (Props is not IPortableDevicePropertiesBulk bulk) return "Windows non la offre";
+        var list = WpdApi.Create<IPortableDevicePropVariantCollection>(WpdApi.CLSID_PortableDevicePropVariantCollection);
+        var callback = new BulkCallback();
+        try
+        {
+            foreach (var id in ids)
+            {
+                var pv = PropVariant.FromString(id);
+                try { list.Add(ref pv); }
+                finally { PropVariant.PropVariantClear(ref pv); }
+            }
+            int hr = bulk.QueueGetValuesByObjectList(list, _fileKeys!, callback, out var context);
+            if (hr < 0) return "richiesta rifiutata (" + DeviceErrors.Describe(hr) + ")";
+            hr = bulk.Start(ref context);
+            if (hr < 0) return "avvio rifiutato (" + DeviceErrors.Describe(hr) + ")";
+
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            var lastNew = System.Diagnostics.Stopwatch.StartNew();
+            var lastNote = System.Diagnostics.Stopwatch.StartNew();
+            while (true)
+            {
+                bool finished = callback.Done.Wait(TimeSpan.FromSeconds(2));
+                int before = got.Count;
+                while (callback.Results.TryDequeue(out var v))
+                {
+                    var id = GetString(v, WpdApi.ObjectId);
+                    if (id.Length == 0 || !got.Add(id)) { Release(v); continue; }
+                    result.Add(v);
+                }
+                if (got.Count > before) lastNew.Restart();
+                if (finished) break;
+                if (ct.IsCancellationRequested || lastNew.Elapsed > BulkSilence)
+                {
+                    bulk.Cancel(ref context);
+                    callback.Done.Wait(TimeSpan.FromSeconds(5));
+                    ct.ThrowIfCancellationRequested();
+                    return $"nessuna risposta da {lastNew.Elapsed.TotalSeconds:0} s";
+                }
+                if (lastNote.Elapsed > TimeSpan.FromSeconds(15))
+                {
+                    step?.Invoke($"Windows: letti {got.Count} di {ids.Count} in {clock.Elapsed.TotalSeconds:0} s");
+                    lastNote.Restart();
+                }
+                else step?.Invoke(null);
+            }
+            return callback.Status < 0 ? "finita con errore (" + DeviceErrors.Describe(callback.Status) + ")" : null;
+        }
+        finally
+        {
+            Marshal.ReleaseComObject(list);
+            while (callback.Results.TryDequeue(out var v)) Release(v);
+            GC.KeepAlive(callback);
+        }
+    }
+
+    /// <summary>Riceve da Windows i risultati della lettura in blocco, su un thread suo.</summary>
+    [ComVisible(true), ClassInterface(ClassInterfaceType.None)]
+    public sealed class BulkCallback : IPortableDevicePropertiesBulkCallback
+    {
+        internal readonly System.Collections.Concurrent.ConcurrentQueue<IPortableDeviceValues> Results = new();
+        internal readonly ManualResetEventSlim Done = new();
+        internal int Status;
+
+        public int OnStart(ref Guid pContext) => 0;
+
+        public int OnProgress(ref Guid pContext, IntPtr pResults)
+        {
+            if (pResults == IntPtr.Zero) return 0;
+            if (Marshal.GetObjectForIUnknown(pResults) is not IPortableDeviceValuesCollection results) return 0;
+            try
+            {
+                uint n = 0;
+                results.GetCount(ref n);
+                for (uint i = 0; i < n; i++)
+                    if (results.GetAt(i, out var v) >= 0 && v is not null) Results.Enqueue(v);
+            }
+            finally
+            {
+                Marshal.ReleaseComObject(results);
+            }
+            return 0;
+        }
+
+        public int OnEnd(ref Guid pContext, int hrStatus)
+        {
+            Status = hrStatus;
+            Done.Set();
+            return 0;
         }
     }
 

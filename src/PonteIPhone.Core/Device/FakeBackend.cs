@@ -95,7 +95,8 @@ public sealed class FakeBackend : IDeviceBackend
     /// <summary>Cartelle lette una per una da <see cref="EnumerateFolders"/>.</summary>
     public List<string> FoldersRead { get; } = [];
 
-    public IReadOnlyList<string> EnumerateFolders(Func<string, bool> wanted, Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
+    public IReadOnlyList<string> EnumerateFolders(Func<string, bool> wanted, Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct,
+        Action<string?>? step = null)
     {
         EnsureReady();
         var read = new List<string>();

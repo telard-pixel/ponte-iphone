@@ -284,7 +284,7 @@ public sealed class SmartBackend : IDeviceBackend
             AddToMap(map, batch);
             count += batch.Count;
             step(null);
-        }, CancellationToken.None);
+        }, CancellationToken.None, step);
         if (read.Contains("*"))
         {
             _wpdWhole = true;
@@ -306,12 +306,13 @@ public sealed class SmartBackend : IDeviceBackend
     {
         var clock = Stopwatch.StartNew();
         int count = 0;
-        Wpd.Enumerate(batch =>
+        // Tutte le cartelle, con le note di avanzamento (l'elenco normale non ne ha).
+        Wpd.EnumerateFolders(_ => true, batch =>
         {
             AddToMap(map, batch);
             count += batch.Count;
             step(null);
-        }, CancellationToken.None);
+        }, CancellationToken.None, step);
         _wpdWhole = true;
         step($"Windows: letto tutto il Rullino ({count} file) in {clock.Elapsed.TotalSeconds:0.0} s");
     }

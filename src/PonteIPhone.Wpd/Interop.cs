@@ -118,6 +118,43 @@ internal interface IPortableDeviceProperties
     [PreserveSig] int Cancel();
 }
 
+/// <summary>Proprietà di tanti oggetti con una richiesta sola (come Esplora file): si ottiene da IPortableDeviceProperties.</summary>
+[ComImport, Guid("482B05C0-4056-44ED-9E0F-5E23B009DA93"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IPortableDevicePropertiesBulk
+{
+    [PreserveSig]
+    int QueueGetValuesByObjectList(IPortableDevicePropVariantCollection pObjectIDs, IPortableDeviceKeyCollection pKeys,
+        IPortableDevicePropertiesBulkCallback pCallback, out Guid pContext);
+    [PreserveSig]
+    int QueueGetValuesByObjectFormat(ref Guid pguidObjectFormat, [MarshalAs(UnmanagedType.LPWStr)] string pszParentObjectID, uint dwDepth,
+        IPortableDeviceKeyCollection pKeys, IPortableDevicePropertiesBulkCallback pCallback, out Guid pContext);
+    [PreserveSig] int QueueSetValuesByObjectList(IntPtr pObjectValues, IntPtr pCallback, out Guid pContext);
+    [PreserveSig] int Start(ref Guid pContext);
+    [PreserveSig] int Cancel(ref Guid pContext);
+}
+
+/// <summary>
+/// Implementata dall'app e chiamata da Windows (su un altro thread): pubblica e visibile a COM, altrimenti Windows non
+/// la trova; i risultati arrivano come puntatore per non rendere pubbliche anche le altre interfacce.
+/// </summary>
+[ComImport, ComVisible(true), Guid("9DEACB80-11E8-40E3-A9F3-F557986A7845"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IPortableDevicePropertiesBulkCallback
+{
+    [PreserveSig] int OnStart(ref Guid pContext);
+    [PreserveSig] int OnProgress(ref Guid pContext, IntPtr pResults);
+    [PreserveSig] int OnEnd(ref Guid pContext, int hrStatus);
+}
+
+[ComImport, Guid("6E3F2D79-4E07-48C4-8208-D8C2E5AF4A99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+internal interface IPortableDeviceValuesCollection
+{
+    [PreserveSig] int GetCount(ref uint pcElems);
+    [PreserveSig] int GetAt(uint dwIndex, out IPortableDeviceValues ppValues);
+    [PreserveSig] int Add(IPortableDeviceValues pValues);
+    [PreserveSig] int Clear();
+    [PreserveSig] int RemoveAt(uint dwIndex);
+}
+
 [ComImport, Guid("FD8878AC-D841-4D17-891C-E6829CDB6934"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
 internal interface IPortableDeviceResources
 {
@@ -214,6 +251,7 @@ internal static class WpdApi
     private static readonly Guid ClientV1 = new("204D9F0C-2292-4080-9F42-40664E70F859");
     private static readonly Guid FunctionalV1 = new("8F052D93-ABCA-4FC5-A5AC-B01DF4DBE598");
 
+    public static readonly PropertyKey ObjectId = new(ObjectV1, 2);
     public static readonly PropertyKey ObjectParentId = new(ObjectV1, 3);
     public static readonly PropertyKey ObjectName = new(ObjectV1, 4);
     public static readonly PropertyKey ObjectPersistentUniqueId = new(ObjectV1, 5);

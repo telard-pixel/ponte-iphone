@@ -38,7 +38,9 @@ public interface IDeviceBackend : IDisposable
     /// Solo le cartelle di primo livello sotto DCIM che <paramref name="wanted"/> accetta (per nome); restituisce quelle lette.
     /// Chi non sa scegliere le legge tutte e restituisce "*".
     /// </summary>
-    IReadOnlyList<string> EnumerateFolders(Func<string, bool> wanted, Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct)
+    /// <param name="step">Note di avanzamento per il registro (null = solo un segno di vita).</param>
+    IReadOnlyList<string> EnumerateFolders(Func<string, bool> wanted, Action<IReadOnlyList<RemoteFile>> batch, CancellationToken ct,
+        Action<string?>? step = null)
     {
         Enumerate(batch, ct);
         return ["*"];
