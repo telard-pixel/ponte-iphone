@@ -279,6 +279,26 @@ public sealed class AppleTests : IDisposable
     }
 
     [Fact]
+    public void DeleteWaitsForWindowsToShowThePhotos()
+    {
+        // 17/10: dopo un avvio o un ricollegamento Windows mostra la memoria vuota per un po', poi le foto.
+        var fake = new FakeBackend { Locked = true };
+        fake.Add("202510_a", "IMG_0002.JPG", _phone.Files["/DCIM/100APPLE/IMG_0002.JPG"].Length, new DateTime(2025, 10, 9, 10, 0, 0));
+        int waits = 0;
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => fake,
+            sleep: _ => { if (++waits == 4) fake.Locked = false; });
+        Assert.True(backend.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid).Ready);
+        var steps = new List<string>();
+
+        var result = Assert.Single(backend.Delete(["/DCIM/100APPLE/IMG_0002.JPG"], t => { if (t is not null) steps.Add(t); }));
+
+        Assert.True(result.Ok);
+        Assert.Equal(4, waits);
+        Assert.Contains(steps, t => t.Contains("aspetto"));
+        Assert.Contains(steps, t => t.Contains("pronta dopo 20 s"));
+    }
+
+    [Fact]
     public async Task DeleteStopsAtOnceWhenWindowsDoesNotShowThePhotos()
     {
         var fake = new FakeBackend { Locked = true }; // Windows vede il telefono ma con la memoria vuota

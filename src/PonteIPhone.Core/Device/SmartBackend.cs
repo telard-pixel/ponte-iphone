@@ -30,6 +30,8 @@ public sealed class SmartBackend : IDeviceBackend
     private readonly HashSet<string> _wpdFoldersRead = new(StringComparer.OrdinalIgnoreCase);
     private bool _wpdWhole;
     private readonly Action<TimeSpan> _sleep;
+    /// <summary>Quante volte riprovare, a 5 s l'una, se Windows mostra la memoria vuota.</summary>
+    private const int WpdWaitAttempts = 12;
 
     /// <param name="sleep">Attesa tra due tentativi WPD (nei test non aspetta).</param>
     public SmartBackend(AppleBackend apple, Func<IDeviceBackend> wpdFactory, Action<TimeSpan>? sleep = null)
@@ -96,6 +98,8 @@ public sealed class SmartBackend : IDeviceBackend
         // Il 15/10 l'eliminazione si fermava subito con "Windows non mostra le foto": il canale Apple legge anche
         // col telefono bloccato, WPD no. Se è bloccato lo si dice (il motore aspetta lo sblocco e riprova);
         // altrimenti si riprova un paio di volte, perché appena ricollegato Windows mostra la memoria con qualche secondo di ritardo.
+        // Il 17/10 (1.0.54) Windows mostrava la memoria vuota per un po' dopo ogni avvio o ricollegamento, e alle 11:33,
+        // partendo più tardi, vedeva 2711 file: 8 secondi di attesa non bastavano. Ora fino a un minuto, ogni 5 s.
         for (int attempt = 1; map is null && _wpdProblem == DeviceErrors.WpdUnavailable; attempt++)
         {
             if (_apple.IsLocked() == true)
@@ -103,10 +107,14 @@ public sealed class SmartBackend : IDeviceBackend
                 ForgetWpd();
                 return objectIds.Select(id => new DeleteResult(id, false, DeviceErrors.LockedForDelete)).ToList();
             }
-            if (attempt == 3) break;
-            _sleep(TimeSpan.FromSeconds(4));
+            if (attempt > WpdWaitAttempts) break;
+            step(attempt == 1
+                ? "Windows mostra la memoria dell'iPhone vuota: aspetto che la prepari (fino a un minuto) [" + _wpdDetail + "]"
+                : null);
+            _sleep(TimeSpan.FromSeconds(5));
             ForgetWpd();
             map = WpdFiles(wanted, step);
+            if (map is not null) step($"Windows: memoria pronta dopo {attempt * 5} s");
         }
         if (map is null) return objectIds.Select(id => new DeleteResult(id, false, _wpdProblem, _wpdDetail)).ToList();
 
