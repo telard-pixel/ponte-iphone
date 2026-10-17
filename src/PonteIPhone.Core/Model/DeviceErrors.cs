@@ -51,9 +51,11 @@ public static class DeviceErrors
     public const int WpdAmbiguous = unchecked((int)0xA0050006);     // nostro: più iPhone collegati, non si sa quale cancellare
     public const int LockedForDelete = unchecked((int)0xA0050007);  // nostro: iPhone bloccato, Windows non mostra le foto finché non si sblocca
     public const int WpdStale = unchecked((int)0xA0050008);         // nostro: l'elenco di Windows non vale più (ID vecchi): si rilegge e si riprova
+    public const int RetryLater = unchecked((int)0xA0050009);       // nostro: non provato, da riprovare (l'elenco di Windows va riletto)
+    public const int WpdNoAnswer = unchecked((int)0xA005000A);      // nostro: Windows dà errore leggendo le foto dell'iPhone
 
     /// <summary>Errori per cui insistere con gli altri file è inutile: la cancellazione si ferma e lo dice.</summary>
-    public static bool StopsDeletion(int hr) => hr is WpdUnavailable or WpdAmbiguous;
+    public static bool StopsDeletion(int hr) => hr is WpdUnavailable or WpdAmbiguous or WpdNoAnswer;
 
     public static DeviceErrorKind Classify(int hr) => hr switch
     {
@@ -86,6 +88,8 @@ public static class DeviceErrors
         WpdAmbiguous => "ci sono più iPhone collegati: per eliminare lascia collegato solo questo",
         LockedForDelete => "l'iPhone è bloccato: per eliminare va sbloccato",
         WpdStale => "Windows ha cambiato l'elenco delle foto mentre eliminavo: riletto",
+        RetryLater => "da riprovare",
+        WpdNoAnswer => "Windows dà errore mentre legge le foto dell'iPhone: scollega e ricollega il cavo e riprova",
         0 => "errore sconosciuto",
         _ => $"errore 0x{hr:X8}",
     };

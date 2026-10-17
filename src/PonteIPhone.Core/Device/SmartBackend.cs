@@ -125,7 +125,7 @@ public sealed class SmartBackend : IDeviceBackend
         // Ricollegato nel frattempo (anche senza che nessuno se ne sia accorto): gli ID di Windows non valgono più.
         var mux = _apple.CurrentMuxId();
         if (mux is null) throw new DeviceException("iPhone non collegato", DeviceErrors.DeviceNotConnected);
-        if (_wpdFiles is not null && mux != -1 && _wpdMux is not null && mux != _wpdMux) ForgetWpd();
+        if (_wpdFiles is not null && mux != -1 && mux != _wpdMux) ForgetWpd();
         // Bloccato: si dice subito, prima di aprire Windows (il motore aspetta lo sblocco e riprova).
         if (_apple.IsLocked() == true)
             return objectIds.Select(id => new DeleteResult(id, false, DeviceErrors.LockedForDelete)).ToList();
@@ -154,7 +154,7 @@ public sealed class SmartBackend : IDeviceBackend
             // Telefono sparito dal cavo: è uno scollegamento, non una memoria vuota (il motore aspetta che torni).
             if (_apple.CurrentMuxId() is null) throw new DeviceException("iPhone non collegato", DeviceErrors.DeviceNotConnected);
             // L'attesa serve alla memoria vuota; se Windows dà errore leggendo, una riprova sola (prima: 18 × 75 s).
-            if (_wpdReadFailed && ++readFailures > 1) break;
+            if (_wpdReadFailed && ++readFailures > 1) { _wpdProblem = DeviceErrors.WpdNoAnswer; break; }
             if (attempt > WpdWaitAttempts) break;
             step(attempt == 1
                 ? "Windows mostra la memoria dell'iPhone vuota: aspetto che la prepari (fino a un minuto e mezzo) [" + _wpdDetail + "]"
@@ -167,8 +167,19 @@ public sealed class SmartBackend : IDeviceBackend
         if (map is null) return objectIds.Select(id => new DeleteResult(id, false, _wpdProblem, _wpdDetail)).ToList();
 
         var results = new List<DeleteResult>(objectIds.Count);
-        foreach (var id in objectIds)
+        // Elenco di Windows non più affidabile a metà giro: questo file e i restanti tornano al motore "da riprovare"
+        // (non sono errori), quelli già fatti restano fatti, e la prossima chiamata rilegge (revisione del 17/10).
+        void RetryFrom(int index, string why)
         {
+            _wpdStale = true;
+            step("Windows: " + why + ": rileggo l'elenco e riprovo");
+            for (int k = index; k < objectIds.Count; k++) results.Add(new DeleteResult(objectIds[k], false, DeviceErrors.RetryLater));
+        }
+        bool GoneFromPhone(string id) => IsDcim(id) && _apple.Describe(id) is null;
+
+        for (int i = 0; i < objectIds.Count; i++)
+        {
+            var id = objectIds[i];
             if (files[id] is not { } file)
             {
                 results.Add(new DeleteResult(id, false, IsDcim(id) ? DeviceErrors.FileNotFound : DeviceErrors.NoWpdMatch));
@@ -176,17 +187,18 @@ public sealed class SmartBackend : IDeviceBackend
             }
             var wpdId = Match(map, file);
             // Con solo alcune cartelle lette, un omonimo identico di un altro mese non si vedrebbe: se le date non tornano
-            // si legge il resto (una volta) e decide il confronto completo.
+            // si legge il resto (una volta) e decide il confronto completo. Se la lettura completa non riesce, non si cancella.
             if (wpdId is not null && !_wpdWhole && !DatesAgree(map, wpdId, file))
             {
-                if (_wpdWholeTried) wpdId = null;
-                else { ReadWholeSafely(map, step); wpdId = Match(map, file); }
+                if (!_wpdWholeTried) ReadWholeSafely(map, step);
+                wpdId = Match(map, file);
+                if (wpdId is not null && !_wpdWhole && !DatesAgree(map, wpdId, file)) wpdId = null;
             }
             // Non nelle cartelle del suo mese: tutto il resto, una volta sola e solo per il file principale (il video di una
             // Live Photo, la versione modificata e il .AAE spesso Windows non li mostra, o spariscono con la foto).
             if (wpdId is null && !_wpdWholeTried && IsMainFile(file, wanted))
             {
-                if (IsDcim(id) && _apple.Describe(id) is null)
+                if (GoneFromPhone(id))
                 {
                     results.Add(new DeleteResult(id, false, DeviceErrors.FileNotFound)); // già tolto: inutile leggere minuti
                     continue;
@@ -196,7 +208,7 @@ public sealed class SmartBackend : IDeviceBackend
             }
             if (wpdId is null)
             {
-                if (IsDcim(id) && _apple.Describe(id) is null)
+                if (GoneFromPhone(id))
                 {
                     results.Add(new DeleteResult(id, false, DeviceErrors.FileNotFound)); // già tolto (iOS toglie il video Live con la foto)
                     continue;
@@ -206,32 +218,42 @@ public sealed class SmartBackend : IDeviceBackend
                 continue;
             }
             // Subito prima di cancellare: l'oggetto di Windows è ancora quel file? Con un elenco vecchio un ID potrebbe
-            // indicarne un altro (revisione del 17/10): in quel caso non si cancella niente e si rilegge.
+            // indicarne un altro: in quel caso non si cancella niente e si rilegge.
             var now = Wpd.DescribeObject(wpdId);
+            if (now is null && GoneFromPhone(id))
+            {
+                // Sparito anche dal telefono: iOS lo ha tolto insieme alla foto (video Live). È fatto.
+                RemoveFromMap(map, wpdId);
+                _known.Remove(id);
+                results.Add(new DeleteResult(id, false, DeviceErrors.FileNotFound));
+                continue;
+            }
             if (now is null || now.Size != file.Size || !string.Equals(now.Name, file.Name, StringComparison.OrdinalIgnoreCase))
             {
-                step($"Windows: l'oggetto di {file.Name} non corrisponde più ({now?.Name ?? "sparito"}): rileggo l'elenco");
-                throw new DeviceException("Elenco di Windows non più valido", DeviceErrors.WpdStale);
+                RetryFrom(i, $"l'oggetto di {file.Name} non corrisponde più ({now?.Name ?? "sparito"})");
+                break;
             }
             var r = Wpd.Delete([wpdId]).FirstOrDefault() ?? new DeleteResult(wpdId, false, DeviceErrors.GenFailure);
             step(null);
             if (!r.Ok && DeviceErrors.Classify(r.HResult) == DeviceErrorKind.Gone)
                 throw new DeviceException("iPhone scollegato durante l'eliminazione", r.HResult); // al nuovo tentativo quelli già tolti risultano "non trovati"
-            if (!r.Ok && DeviceErrors.IsNotFound(r.HResult) && IsDcim(id) && _apple.Describe(id) is not null)
+            if (!r.Ok && DeviceErrors.IsNotFound(r.HResult) && !GoneFromPhone(id) && IsDcim(id))
             {
-                // WPD dice "non trovato" ma il file è ancora sul telefono: ID vecchi. Ci si ferma e si rilegge.
-                throw new DeviceException("Elenco di Windows non più valido", DeviceErrors.WpdStale);
-            }
-            if (!r.Ok && !DeviceErrors.IsNotFound(r.HResult) && !r.Refused)
-            {
-                // Errore di Windows (es. "la periferica non funziona" su un collegamento morto): stessa sessione = stessi errori.
-                step($"Windows: {file.Name} non cancellato ({DeviceErrors.Describe(r.HResult)}): riprovo con un elenco nuovo");
-                throw new DeviceException("Windows non ha cancellato: " + DeviceErrors.Describe(r.HResult), DeviceErrors.WpdStale);
+                RetryFrom(i, $"{file.Name} non trovato da Windows ma ancora sul telefono"); // ID vecchi
+                break;
             }
             if (r.Ok || DeviceErrors.IsNotFound(r.HResult))
             {
                 RemoveFromMap(map, wpdId);
                 _known.Remove(id);
+            }
+            else if (!r.Refused)
+            {
+                // Errore di Windows su questo file (es. "la periferica non funziona"): questo conta come non riuscito,
+                // gli altri si riprovano con un elenco nuovo invece di insistere sulla stessa sessione.
+                results.Add(r with { ObjectId = id });
+                RetryFrom(i + 1, $"{file.Name} non cancellato ({DeviceErrors.Describe(r.HResult)})");
+                break;
             }
             results.Add(r with { ObjectId = id });
         }
