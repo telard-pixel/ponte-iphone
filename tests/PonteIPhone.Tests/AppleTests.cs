@@ -313,12 +313,46 @@ public sealed class AppleTests : IDisposable
 
         heic.Info = heic.Info with { Name = "IMG_9999.HEIC" }; // stesso ID, adesso è un'altra foto
 
-        var e = Assert.Throws<DeviceException>(() => backend.Delete(["/DCIM/100APPLE/IMG_0001.HEIC"]));
-        Assert.Equal(DeviceErrors.WpdStale, e.Code);
+        // Niente cancellato: torna "da riprovare" e l'elenco si rilegge alla prossima chiamata.
+        Assert.Equal(DeviceErrors.RetryLater, Assert.Single(backend.Delete(["/DCIM/100APPLE/IMG_0001.HEIC"])).HResult);
         Assert.Equal(["IMG_0002.JPG"], fake.Deleted);
         // Al nuovo tentativo si rilegge: la foto vera non c'è più in Windows, quindi non si cancella niente.
         Assert.Equal(DeviceErrors.NoWpdMatch, Assert.Single(backend.Delete(["/DCIM/100APPLE/IMG_0001.HEIC"])).HResult);
         Assert.Equal(["IMG_0002.JPG"], fake.Deleted);
+    }
+
+    [Fact]
+    public async Task ALivePhotoWhoseVideoGoesWithThePhotoCountsAsDeleted()
+    {
+        // Seconda revisione del 17/10: iOS toglie il video Live insieme alla foto; il controllo prima di cancellare
+        // lo trovava sparito e fermava tutto. Deve contare come fatto, e l'eliminazione deve andare avanti.
+        var fake = new FakeBackend();
+        var oct = new DateTime(2025, 10, 9, 10, 0, 0);
+        fake.Add("202510_a", "IMG_0001.HEIC", _phone.Files["/DCIM/100APPLE/IMG_0001.HEIC"].Length, oct);
+        fake.Add("202510_a", "IMG_0001.MOV", _phone.Files["/DCIM/100APPLE/IMG_0001.MOV"].Length, oct);
+        fake.Add("202510_a", "IMG_0002.JPG", _phone.Files["/DCIM/100APPLE/IMG_0002.JPG"].Length, oct);
+        fake.OnDeleted = f =>
+        {
+            _phone.Files.Remove("/DCIM/100APPLE/" + f.Name);
+            if (f.Name != "IMG_0001.HEIC") return;
+            _phone.Files.Remove("/DCIM/100APPLE/IMG_0001.MOV");
+            fake.Files.RemoveAll(x => x.Info.Name == "IMG_0001.MOV");
+        };
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => fake);
+        await using var conn = new InProcessConnection(backend);
+        var opened = await conn.OpenAsync(AppleBackend.IdPrefix + FakeAppleDevice.Udid, CancellationToken.None);
+        var files = new List<RemoteFile>();
+        await conn.EnumerateAsync(files.AddRange, CancellationToken.None);
+        var items = MediaGrouper.Group(files).Where(i => i.BaseName is "IMG_0001" or "IMG_0002").ToList();
+        Assert.Equal(2, items.Count);
+        using var registry = new CopyRegistry(Path.Combine(_dir, "copie.db"));
+
+        var report = await new TransferEngine(conn, opened.Device, registry, converter: null)
+            .DeleteAsync(items, new TransferOptions { DestinationRoot = _dir }, null, CancellationToken.None);
+
+        Assert.Equal(2, report.Deleted);
+        Assert.Equal(0, report.DeleteFailed);
+        Assert.Equal(["IMG_0001.HEIC", "IMG_0002.JPG"], fake.Deleted.Order());
     }
 
     [Fact]

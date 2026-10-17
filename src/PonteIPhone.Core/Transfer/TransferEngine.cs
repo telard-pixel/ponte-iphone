@@ -766,6 +766,27 @@ public sealed class TransferEngine
                 SetPhase(TransferPhase.Deleting, deleting);
             }
 
+            // "Da riprovare": non provati perché l'elenco di Windows andava riletto. Tornano in coda senza contare come
+            // errore; una risposta in cui non è passato niente conta come intoppo (al quarto ci si ferma).
+            var retry = deletable.Where(item => ids.Any(x => x.Item == item && x.File.Role == FileRole.Primary
+                && byId.TryGetValue(x.Id, out var r) && r.HResult == DeviceErrors.RetryLater)).ToList();
+            if (retry.Count > 0)
+            {
+                Requeue(retry, countAsError: false);
+                deletable = deletable.Except(retry).ToList();
+                if (deletable.Count == 0)
+                {
+                    if (++hiccups > 3)
+                    {
+                        _report.DeleteProblem ??= "Windows continuava a cambiare l'elenco delle foto: riprova tra poco";
+                        _report.DeleteFailed += queue.Count;
+                        _log?.Warn("Cancellazione interrotta: " + _report.DeleteProblem);
+                        return;
+                    }
+                    continue;
+                }
+            }
+
             var failed = new List<(MediaItem Item, bool Refused)>();
             foreach (var item in deletable)
             {

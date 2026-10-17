@@ -39,6 +39,8 @@ public sealed class FakeBackend : IDeviceBackend
     public int LockDuringDownloads;
     /// <summary>La prossima cancellazione trova l'iPhone appena bloccato: tutto "accesso negato".</summary>
     public bool LockOnNextDelete;
+    /// <summary>Dopo ogni cancellazione riuscita (i test simulano iOS che toglie anche il video di una Live Photo).</summary>
+    public Action<RemoteFile>? OnDeleted { get; set; }
     /// <summary>La prossima lettura delle cartelle trova il telefono scollegato (cavo caduto a metà).</summary>
     public bool GoneOnNextFolderRead;
     /// <summary>Le prossime N cancellazioni non rispondono (come il processo chiuso dal watchdog o un telefono lento).</summary>
@@ -215,6 +217,7 @@ public sealed class FakeBackend : IDeviceBackend
             Files.Remove(f);
             Deleted.Add(f.Info.Name);
             results.Add(new DeleteResult(id, true, 0));
+            OnDeleted?.Invoke(f.Info);
         }
         return results;
     }
