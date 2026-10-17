@@ -12,6 +12,7 @@ public partial class MainWindow : FluentWindow
     private readonly MainViewModel _vm;
     private DeviceMonitor? _monitor;
     private bool _closing;
+    private bool _closed;
 
     public MainWindow(MainViewModel vm)
     {
@@ -33,15 +34,23 @@ public partial class MainWindow : FluentWindow
 
     private async void OnClosing(object? sender, CancelEventArgs e)
     {
-        if (_closing) return;
-        if (!_vm.ConfirmClose())
-        {
-            e.Cancel = true;
-            return;
-        }
+        if (_closed) return; // seconda chiamata, a lavori finiti: si chiude davvero
+        // La finestra resta aperta finché la chiusura (rapporti, aggiornamento, telefono) non è finita: il 17/10 chiuderla
+        // subito e finire dopo faceva chiudere a WPF una finestra già in chiusura (InvalidOperationException).
+        e.Cancel = true;
+        if (_closing || !_vm.ConfirmClose()) return;
         _closing = true;
         _monitor?.Dispose();
-        await _vm.ShutdownAsync();
+        try
+        {
+            await _vm.ShutdownAsync();
+        }
+        finally
+        {
+            _closed = true;
+            // Con Application.Shutdown (aggiornamento) la finestra si chiude comunque: non richiuderla.
+            if (PresentationSource.FromVisual(this) is not null) Close();
+        }
     }
 
     // ------------------------------------------------------------------ griglia

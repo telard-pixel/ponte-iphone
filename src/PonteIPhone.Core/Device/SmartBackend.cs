@@ -216,6 +216,8 @@ public sealed class SmartBackend : IDeviceBackend
                     return null;
                 }
                 _wpdDetail = string.Join(" | ", opened.Notes ?? []);
+                // Cosa ha trovato Windows aprendo il telefono (DCIM o no, cartelle viste): nel registro anche quando va.
+                step("Windows: " + _wpdDetail);
                 _wpdFiles = new Dictionary<string, List<RemoteFile>>(StringComparer.OrdinalIgnoreCase);
                 _wpdFoldersRead.Clear();
                 _wpdWhole = false;

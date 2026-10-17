@@ -269,15 +269,45 @@ public sealed class WpdBackend : IDeviceBackend
         CancellationToken ct, Action<string?>? step = null)
     {
         var dcim = _dcimId ?? throw new DeviceException("iPhone non aperto o senza Rullino", DeviceErrors.WpdDeviceNotOpen);
-        if (_wholeStorage)
-        {
-            Enumerate(batch, ct);
-            return ["*"];
-        }
+        var where = _wholeStorage ? "la memoria" : "DCIM";
         var clock = System.Diagnostics.Stopwatch.StartNew();
-        var children = Children(dcim);
+        var folders = Subfolders(dcim, where, step, ct);
+        step?.Invoke($"Windows: {where} ha {folders.Count} cartelle ({string.Join(", ", folders.Take(12).Select(f => f.Name))}" +
+                     $"{(folders.Count > 12 ? ", …" : "")}) in {clock.Elapsed.TotalSeconds:0.0} s");
+        var read = new List<string>();
+        var buffer = new List<RemoteFile>(256);
+        foreach (var (id, name) in folders)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (wanted(name))
+            {
+                read.Add(name);
+                Walk(id, name, 1, buffer, batch, ct, step);
+            }
+            else if (_wholeStorage)
+            {
+                // Senza DCIM (17/10, iOS 27: Windows ha letto "tutta la memoria", 2141 file in 92 s) le cartelle del mese
+                // possono stare un livello più giù, dentro una cartella con un altro nome: si guardano anche quelle.
+                foreach (var (subId, subName) in Subfolders(id, name, step, ct))
+                {
+                    if (!wanted(subName)) continue;
+                    read.Add(subName);
+                    Walk(subId, name + "/" + subName, 2, buffer, batch, ct, step);
+                }
+            }
+            else continue;
+            // Un blocco per cartella, anche vuoto: è il segno di vita per chi aspetta.
+            batch(buffer.ToList());
+            buffer.Clear();
+        }
+        return read;
+    }
+
+    /// <summary>Le cartelle dentro <paramref name="parentId"/> (ID e nome), senza guardare i file.</summary>
+    private List<(string Id, string Name)> Subfolders(string parentId, string label, Action<string?>? step, CancellationToken ct)
+    {
         var folders = new List<(string Id, string Name)>();
-        foreach (var v in ReadMany(children, "DCIM", step, ct))
+        foreach (var v in ReadMany(Children(parentId), label, step, ct))
         {
             try
             {
@@ -289,21 +319,7 @@ public sealed class WpdBackend : IDeviceBackend
                 Release(v);
             }
         }
-        step?.Invoke($"Windows: DCIM ha {folders.Count} cartelle ({string.Join(", ", folders.Take(12).Select(f => f.Name))}" +
-                     $"{(folders.Count > 12 ? ", …" : "")}) in {clock.Elapsed.TotalSeconds:0.0} s");
-        var read = new List<string>();
-        var buffer = new List<RemoteFile>(256);
-        foreach (var (id, name) in folders)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!wanted(name)) continue;
-            read.Add(name);
-            Walk(id, name, 1, buffer, batch, ct, step);
-            // Un blocco per cartella, anche vuoto: è il segno di vita per chi aspetta.
-            batch(buffer.ToList());
-            buffer.Clear();
-        }
-        return read;
+        return folders;
     }
 
     private static string NameOf(IPortableDeviceValues v) =>
