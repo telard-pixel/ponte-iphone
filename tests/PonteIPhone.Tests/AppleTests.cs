@@ -299,6 +299,45 @@ public sealed class AppleTests : IDisposable
     }
 
     [Fact]
+    public void AnOldWindowsIdPointingToAnotherPhotoIsNeverDeleted()
+    {
+        // Revisione del 17/10: tenendo l'elenco di Windows, dopo un ricollegamento non notato un ID vecchio potrebbe
+        // indicare un'altra foto. Subito prima di cancellare si ricontrolla nome e dimensione dell'oggetto.
+        var fake = new FakeBackend();
+        var oct = new DateTime(2025, 10, 9, 10, 0, 0);
+        fake.Add("202510_a", "IMG_0002.JPG", _phone.Files["/DCIM/100APPLE/IMG_0002.JPG"].Length, oct);
+        var heic = fake.Add("202510_a", "IMG_0001.HEIC", _phone.Files["/DCIM/100APPLE/IMG_0001.HEIC"].Length, oct);
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => fake);
+        Assert.True(backend.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid).Ready);
+        Assert.True(Assert.Single(backend.Delete(["/DCIM/100APPLE/IMG_0002.JPG"])).Ok);
+
+        heic.Info = heic.Info with { Name = "IMG_9999.HEIC" }; // stesso ID, adesso è un'altra foto
+
+        var e = Assert.Throws<DeviceException>(() => backend.Delete(["/DCIM/100APPLE/IMG_0001.HEIC"]));
+        Assert.Equal(DeviceErrors.WpdStale, e.Code);
+        Assert.Equal(["IMG_0002.JPG"], fake.Deleted);
+        // Al nuovo tentativo si rilegge: la foto vera non c'è più in Windows, quindi non si cancella niente.
+        Assert.Equal(DeviceErrors.NoWpdMatch, Assert.Single(backend.Delete(["/DCIM/100APPLE/IMG_0001.HEIC"])).HResult);
+        Assert.Equal(["IMG_0002.JPG"], fake.Deleted);
+    }
+
+    [Fact]
+    public void ACableDropWhileReadingIsADisconnectionNotAnEmptyMemory()
+    {
+        // Revisione del 17/10: lo scollegamento durante la lettura diventava "memoria vuota" e dopo 90 s fermava tutto.
+        var fake = new FakeBackend { GoneOnNextFolderRead = true };
+        fake.Add("202510_a", "IMG_0002.JPG", _phone.Files["/DCIM/100APPLE/IMG_0002.JPG"].Length, new DateTime(2025, 10, 9, 10, 0, 0));
+        int waits = 0;
+        using var backend = new SmartBackend(new AppleBackend(_phone.Client(), _pairs), () => fake, sleep: _ => waits++);
+        Assert.True(backend.Open(AppleBackend.IdPrefix + FakeAppleDevice.Udid).Ready);
+
+        var e = Assert.Throws<DeviceException>(() => backend.Delete(["/DCIM/100APPLE/IMG_0002.JPG"]));
+        Assert.Equal(DeviceErrorKind.Gone, e.Kind);
+        Assert.Equal(0, waits);
+        Assert.True(Assert.Single(backend.Delete(["/DCIM/100APPLE/IMG_0002.JPG"])).Ok); // tornato: si rilegge e si cancella
+    }
+
+    [Fact]
     public void AFileAlreadyGoneFromThePhoneCountsAsDeleted()
     {
         // Un tentativo interrotto può aver già tolto il file: non deve risultare "non eliminato".

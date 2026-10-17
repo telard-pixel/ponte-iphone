@@ -46,6 +46,9 @@ public interface IDeviceBackend : IDisposable
         return ["*"];
     }
 
+    /// <summary>Nome e dimensione attuali di un oggetto (per controllarlo subito prima di cancellarlo), o null.</summary>
+    RemoteFile? DescribeObject(string objectId) => null;
+
     /// <summary>Cancella dal telefono, un file alla volta: l'esito di ognuno è nel risultato, non in un'eccezione.</summary>
     IReadOnlyList<DeleteResult> Delete(IReadOnlyList<string> objectIds);
 

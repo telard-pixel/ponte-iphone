@@ -39,6 +39,8 @@ public sealed class FakeBackend : IDeviceBackend
     public int LockDuringDownloads;
     /// <summary>La prossima cancellazione trova l'iPhone appena bloccato: tutto "accesso negato".</summary>
     public bool LockOnNextDelete;
+    /// <summary>La prossima lettura delle cartelle trova il telefono scollegato (cavo caduto a metà).</summary>
+    public bool GoneOnNextFolderRead;
     /// <summary>Le prossime N cancellazioni non rispondono (come il processo chiuso dal watchdog o un telefono lento).</summary>
     public int FailNextDeletes;
     /// <summary>Il telefono rifiuta le cancellazioni (come potrebbe fare iOS).</summary>
@@ -101,6 +103,11 @@ public sealed class FakeBackend : IDeviceBackend
         Action<string?>? step = null)
     {
         EnsureReady();
+        if (GoneOnNextFolderRead)
+        {
+            GoneOnNextFolderRead = false;
+            throw new DeviceException("iPhone scollegato", DeviceErrors.DeviceNotConnected);
+        }
         var read = new List<string>();
         foreach (var folder in Files.Select(f => f.Info.Folder.Split('/')[0]).Distinct(StringComparer.OrdinalIgnoreCase))
         {
@@ -177,6 +184,12 @@ public sealed class FakeBackend : IDeviceBackend
 
         output.Flush(flushToDisk: true);
         return new DownloadResult(written, Convert.ToHexString(sha.GetHashAndReset()));
+    }
+
+    public RemoteFile? DescribeObject(string objectId)
+    {
+        EnsureReady();
+        return Files.FirstOrDefault(f => f.Info.ObjectId == objectId)?.Info;
     }
 
     public IReadOnlyList<DeleteResult> Delete(IReadOnlyList<string> objectIds)

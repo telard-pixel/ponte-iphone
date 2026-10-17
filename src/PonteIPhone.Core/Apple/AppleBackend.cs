@@ -61,6 +61,17 @@ public sealed partial class AppleBackend : IDeviceBackend
     /// <summary>Quanti iPhone sono collegati col cavo (con più telefoni la cancellazione deve essere sicura del telefono giusto).</summary>
     public int UsbDeviceCount() => UsbDevices().Count;
 
+    /// <summary>
+    /// ID usbmux attuale dell'iPhone aperto: cambia a ogni collegamento del cavo, quindi dice se nel frattempo è stato
+    /// ricollegato. Null se non è collegato, -1 se il servizio Apple non risponde (non si sa).
+    /// </summary>
+    public int? CurrentMuxId()
+    {
+        if (_openedId is null) return null;
+        try { return UsbDevices().FirstOrDefault(d => d.Udid == Udid(_openedId))?.DeviceId; }
+        catch (UsbmuxException) { return -1; }
+    }
+
     private static string Udid(string deviceId) => deviceId.StartsWith(IdPrefix, StringComparison.Ordinal) ? deviceId[IdPrefix.Length..] : deviceId;
 
     public OpenResult Open(string deviceId)

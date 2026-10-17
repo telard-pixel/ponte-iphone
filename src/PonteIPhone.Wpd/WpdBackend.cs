@@ -527,6 +527,22 @@ public sealed class WpdBackend : IDeviceBackend
         }
     }
 
+    public RemoteFile? DescribeObject(string objectId)
+    {
+        var v = ReadFileValues(objectId);
+        if (v is null) return null;
+        try
+        {
+            return new RemoteFile(objectId, NameOf(v), "", (long)GetULong(v, WpdApi.ObjectSize),
+                GetDate(v, WpdApi.ObjectDateAuthored) ?? GetDate(v, WpdApi.ObjectDateCreated), GetDate(v, WpdApi.ObjectDateModified),
+                !HasValue(v, WpdApi.ObjectCanDelete) || GetBool(v, WpdApi.ObjectCanDelete));
+        }
+        finally
+        {
+            Release(v);
+        }
+    }
+
     private IPortableDeviceValues? ReadFileValues(string id)
     {
         int hr = Props.GetValues(id, _fileKeys, out var values);

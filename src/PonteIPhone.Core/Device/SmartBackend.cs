@@ -35,6 +35,10 @@ public sealed class SmartBackend : IDeviceBackend
     private bool _wpdStale;
     /// <summary>Telefono aperto l'ultima volta: riaprire lo stesso non butta via quello che Windows ha già mostrato.</summary>
     private string? _openedFor;
+    /// <summary>ID usbmux del collegamento con cui è stato letto l'elenco di Windows: se cambia, il cavo è stato ricollegato.</summary>
+    private int? _wpdMux;
+    /// <summary>L'ultima lettura delle cartelle è fallita con un errore (non "memoria vuota"): una riprova sola.</summary>
+    private bool _wpdReadFailed;
     private readonly Action<TimeSpan> _sleep;
     /// <summary>Quante volte riprovare, a 5 s l'una, se Windows mostra la memoria vuota.</summary>
     private const int WpdWaitAttempts = 18;
@@ -107,11 +111,21 @@ public sealed class SmartBackend : IDeviceBackend
             _wpdStale = true;
             throw new DeviceException("Windows: " + e.Message, e.HResult, e);
         }
+        catch (DeviceException e) when (e.Kind == DeviceErrorKind.Gone || e.Code == DeviceErrors.WpdStale)
+        {
+            // Scollegato (da qualunque canale) o elenco non più valido: alla prossima chiamata si rilegge da capo.
+            _wpdStale = true;
+            throw;
+        }
     }
 
     private IReadOnlyList<DeleteResult> DeleteCore(IReadOnlyList<string> objectIds, Action<string?> step)
     {
         if (_wpdStale) ForgetWpd();
+        // Ricollegato nel frattempo (anche senza che nessuno se ne sia accorto): gli ID di Windows non valgono più.
+        var mux = _apple.CurrentMuxId();
+        if (mux is null) throw new DeviceException("iPhone non collegato", DeviceErrors.DeviceNotConnected);
+        if (_wpdFiles is not null && mux != -1 && _wpdMux is not null && mux != _wpdMux) ForgetWpd();
         // Bloccato: si dice subito, prima di aprire Windows (il motore aspetta lo sblocco e riprova).
         if (_apple.IsLocked() == true)
             return objectIds.Select(id => new DeleteResult(id, false, DeviceErrors.LockedForDelete)).ToList();
@@ -120,15 +134,16 @@ public sealed class SmartBackend : IDeviceBackend
         // Un file che il canale Apple non trova più è già stato tolto (es. da un tentativo interrotto): conta come fatto.
         var files = new Dictionary<string, RemoteFile?>(StringComparer.Ordinal);
         foreach (var id in objectIds)
-            if (!files.ContainsKey(id)) files[id] = _known.TryGetValue(id, out var k) ? k : _apple.Describe(id);
+            if (!files.ContainsKey(id)) files[id] = !IsDcim(id) ? _known.GetValueOrDefault(id) : _apple.Describe(id);
         var wanted = files.Values.OfType<RemoteFile>().ToList();
         if (wanted.Count == 0)
-            return objectIds.Select(id => new DeleteResult(id, false, DeviceErrors.FileNotFound)).ToList();
+            return objectIds.Select(id => new DeleteResult(id, false, IsDcim(id) ? DeviceErrors.FileNotFound : DeviceErrors.NoWpdMatch)).ToList();
 
         var map = WpdFiles(wanted, step);
         // Il 17/10 (1.0.54) Windows mostrava la memoria vuota per un po' dopo ogni avvio o ricollegamento, e alle 11:33,
         // partendo più tardi, vedeva 2711 file: 8 secondi di attesa non bastavano. Ora fino a un minuto e mezzo, ogni 5 s,
         // il tempo di sbloccare lo schermo.
+        int readFailures = 0;
         for (int attempt = 1; map is null && _wpdProblem == DeviceErrors.WpdUnavailable; attempt++)
         {
             if (_apple.IsLocked() == true)
@@ -136,6 +151,10 @@ public sealed class SmartBackend : IDeviceBackend
                 ForgetWpd();
                 return objectIds.Select(id => new DeleteResult(id, false, DeviceErrors.LockedForDelete)).ToList();
             }
+            // Telefono sparito dal cavo: è uno scollegamento, non una memoria vuota (il motore aspetta che torni).
+            if (_apple.CurrentMuxId() is null) throw new DeviceException("iPhone non collegato", DeviceErrors.DeviceNotConnected);
+            // L'attesa serve alla memoria vuota; se Windows dà errore leggendo, una riprova sola (prima: 18 × 75 s).
+            if (_wpdReadFailed && ++readFailures > 1) break;
             if (attempt > WpdWaitAttempts) break;
             step(attempt == 1
                 ? "Windows mostra la memoria dell'iPhone vuota: aspetto che la prepari (fino a un minuto e mezzo) [" + _wpdDetail + "]"
@@ -152,22 +171,32 @@ public sealed class SmartBackend : IDeviceBackend
         {
             if (files[id] is not { } file)
             {
-                results.Add(new DeleteResult(id, false, DeviceErrors.FileNotFound));
+                results.Add(new DeleteResult(id, false, IsDcim(id) ? DeviceErrors.FileNotFound : DeviceErrors.NoWpdMatch));
                 continue;
             }
             var wpdId = Match(map, file);
-            // Non nelle cartelle del suo mese (la data del file può non essere quella dello scatto): tutto il resto,
-            // una volta sola e solo per il file principale. Il video di una Live Photo, la versione modificata e il .AAE
-            // spesso Windows non li mostra, o spariscono con la foto: per loro non vale la pena leggere minuti.
+            // Con solo alcune cartelle lette, un omonimo identico di un altro mese non si vedrebbe: se le date non tornano
+            // si legge il resto (una volta) e decide il confronto completo.
+            if (wpdId is not null && !_wpdWhole && !DatesAgree(map, wpdId, file))
+            {
+                if (_wpdWholeTried) wpdId = null;
+                else { ReadWholeSafely(map, step); wpdId = Match(map, file); }
+            }
+            // Non nelle cartelle del suo mese: tutto il resto, una volta sola e solo per il file principale (il video di una
+            // Live Photo, la versione modificata e il .AAE spesso Windows non li mostra, o spariscono con la foto).
             if (wpdId is null && !_wpdWholeTried && IsMainFile(file, wanted))
             {
-                try { ReadWholeWpd(map, step); }
-                catch (DeviceException e) when (e.Kind != DeviceErrorKind.Gone) { step("Windows: lettura completa non riuscita: " + e.Message); }
+                if (IsDcim(id) && _apple.Describe(id) is null)
+                {
+                    results.Add(new DeleteResult(id, false, DeviceErrors.FileNotFound)); // già tolto: inutile leggere minuti
+                    continue;
+                }
+                ReadWholeSafely(map, step);
                 wpdId = Match(map, file);
             }
             if (wpdId is null)
             {
-                if (_apple.Describe(id) is null)
+                if (IsDcim(id) && _apple.Describe(id) is null)
                 {
                     results.Add(new DeleteResult(id, false, DeviceErrors.FileNotFound)); // già tolto (iOS toglie il video Live con la foto)
                     continue;
@@ -176,28 +205,55 @@ public sealed class SmartBackend : IDeviceBackend
                 results.Add(new DeleteResult(id, false, DeviceErrors.NoWpdMatch));
                 continue;
             }
+            // Subito prima di cancellare: l'oggetto di Windows è ancora quel file? Con un elenco vecchio un ID potrebbe
+            // indicarne un altro (revisione del 17/10): in quel caso non si cancella niente e si rilegge.
+            var now = Wpd.DescribeObject(wpdId);
+            if (now is null || now.Size != file.Size || !string.Equals(now.Name, file.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                step($"Windows: l'oggetto di {file.Name} non corrisponde più ({now?.Name ?? "sparito"}): rileggo l'elenco");
+                throw new DeviceException("Elenco di Windows non più valido", DeviceErrors.WpdStale);
+            }
             var r = Wpd.Delete([wpdId]).FirstOrDefault() ?? new DeleteResult(wpdId, false, DeviceErrors.GenFailure);
             step(null);
             if (!r.Ok && DeviceErrors.Classify(r.HResult) == DeviceErrorKind.Gone)
+                throw new DeviceException("iPhone scollegato durante l'eliminazione", r.HResult); // al nuovo tentativo quelli già tolti risultano "non trovati"
+            if (!r.Ok && DeviceErrors.IsNotFound(r.HResult) && IsDcim(id) && _apple.Describe(id) is not null)
             {
-                // Scollegato: inutile provare gli altri. Al nuovo tentativo quelli già tolti risultano "non trovati".
-                _wpdStale = true;
-                throw new DeviceException("iPhone scollegato durante l'eliminazione", r.HResult);
+                // WPD dice "non trovato" ma il file è ancora sul telefono: ID vecchi. Ci si ferma e si rilegge.
+                throw new DeviceException("Elenco di Windows non più valido", DeviceErrors.WpdStale);
             }
-            if (!r.Ok && DeviceErrors.IsNotFound(r.HResult) && _apple.Describe(id) is not null)
+            if (!r.Ok && !DeviceErrors.IsNotFound(r.HResult) && !r.Refused)
             {
-                // WPD dice "non trovato" ma il file è ancora sul telefono: ID vecchio, non una cancellazione riuscita.
-                // Si rilegge alla prossima chiamata, non a metà di questa.
-                r = r with { HResult = DeviceErrors.NoWpdMatch };
-                _wpdStale = true;
+                // Errore di Windows (es. "la periferica non funziona" su un collegamento morto): stessa sessione = stessi errori.
+                step($"Windows: {file.Name} non cancellato ({DeviceErrors.Describe(r.HResult)}): riprovo con un elenco nuovo");
+                throw new DeviceException("Windows non ha cancellato: " + DeviceErrors.Describe(r.HResult), DeviceErrors.WpdStale);
             }
-            else if (r.Ok || DeviceErrors.IsNotFound(r.HResult))
+            if (r.Ok || DeviceErrors.IsNotFound(r.HResult))
             {
                 RemoveFromMap(map, wpdId);
+                _known.Remove(id);
             }
             results.Add(r with { ObjectId = id });
         }
         return results;
+    }
+
+    private static bool IsDcim(string id) => id.StartsWith("/DCIM/", StringComparison.Ordinal);
+
+    /// <summary>Lettura completa che non fa saltare la cancellazione se fallisce (tranne uno scollegamento).</summary>
+    private void ReadWholeSafely(Dictionary<string, List<RemoteFile>> map, Action<string?> step)
+    {
+        try { ReadWholeWpd(map, step); }
+        catch (DeviceException e) when (e.Kind != DeviceErrorKind.Gone) { step("Windows: lettura completa non riuscita: " + e.Message); }
+    }
+
+    /// <summary>Date di Windows e del canale Apple entro 26 ore (fuso orario); senza una delle due non si scarta.</summary>
+    private static bool DatesAgree(Dictionary<string, List<RemoteFile>> map, string wpdId, RemoteFile file)
+    {
+        var w = map.Values.SelectMany(l => l).FirstOrDefault(f => f.ObjectId == wpdId);
+        var a = file.Created ?? file.Modified;
+        var b = w?.Created ?? w?.Modified;
+        return a is null || b is null || Math.Abs((a.Value - b.Value).TotalHours) <= 26;
     }
 
     /// <summary>Il file che decide (la foto o il video), non il video Live, la versione modificata o il .AAE che l'accompagnano.</summary>
@@ -234,6 +290,8 @@ public sealed class SmartBackend : IDeviceBackend
         _wpdWhole = false;
         _wpdWholeTried = false;
         _wpdStale = false;
+        _wpdMux = null;
+        _wpdReadFailed = false;
     }
 
     private static void RemoveFromMap(Dictionary<string, List<RemoteFile>> map, string wpdId)
@@ -287,14 +345,16 @@ public sealed class SmartBackend : IDeviceBackend
                 // Cosa ha trovato Windows aprendo il telefono (DCIM o no, cartelle viste): nel registro anche quando va.
                 step("Windows: " + _wpdDetail);
                 _wpdFiles = new Dictionary<string, List<RemoteFile>>(StringComparer.OrdinalIgnoreCase);
+                _wpdMux = _apple.CurrentMuxId();
                 _wpdFoldersRead.Clear();
                 _wpdWhole = false;
                 _wpdWholeTried = false;
             }
-            catch (DeviceException e)
+            catch (DeviceException e) when (e.Kind != DeviceErrorKind.Gone)
             {
                 _wpdProblem = DeviceErrors.WpdUnavailable;
                 _wpdDetail = "errore di Windows: " + e.Message;
+                _wpdReadFailed = true;
                 return null;
             }
         }
@@ -305,11 +365,14 @@ public sealed class SmartBackend : IDeviceBackend
             // Cartelle del mese trovate ma vuote: prima di dire "nessun file" si guarda tutto.
             if (map.Count == 0 && !_wpdWholeTried) ReadWholeWpd(map, step);
         }
-        catch (DeviceException e)
+        catch (DeviceException e) when (e.Kind != DeviceErrorKind.Gone)
         {
+            // Uno scollegamento invece esce: il motore aspetta che l'iPhone torni (prima diventava "memoria vuota" e
+            // dopo 90 s fermava tutto).
             _wpdFiles = null;
             _wpdProblem = DeviceErrors.WpdUnavailable;
             _wpdDetail = "errore di Windows: " + e.Message;
+            _wpdReadFailed = true;
             return null;
         }
         if (map.Count == 0)
