@@ -839,9 +839,10 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void SelectGroup(HeaderRow header)
+    private void SelectGroup(object? parameter)
     {
-        if (IsTransferring) return;
+        // Le righe dell'elenco si riciclano: per un attimo il pulsante può ricevere una riga di miniature (17/10, ArgumentException).
+        if (IsTransferring || parameter is not HeaderRow header) return;
         bool all = header.Tiles.All(t => t.IsSelected);
         foreach (var t in header.Tiles) t.IsSelected = !all;
         UpdateSelection();
@@ -1133,6 +1134,26 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>Consiglio sul Blocco automatico, quando non c'è un avviso più importante da mostrare.</summary>
     public bool ShowTransferTip => TransferNotice is null;
 
+    /// <summary>Consiglio mentre si aspetta Windows (eliminazione): resta finché Windows non mostra le foto.</summary>
+    private string? _wpdHint;
+
+    /// <summary>
+    /// Registro del collegamento usato per copiare ed eliminare. Il 17/10 Windows ha mostrato la memoria vuota per
+    /// tutto il minuto d'attesa (sembra tenersi la lettura vuota fino a un nuovo collegamento del cavo): lo si dice
+    /// subito nel pannello, e dopo il ricollegamento l'eliminazione riprende da sola.
+    /// </summary>
+    private void TransferLog(string message)
+    {
+        _log.Info(message);
+        string? hint = message.StartsWith("Windows mostra la memoria dell'iPhone vuota", StringComparison.Ordinal)
+            ? "Windows non vede ancora le foto dell'iPhone. Tienilo sbloccato, poi scollega e ricollega il cavo: l'eliminazione riprende da sola."
+            : message.StartsWith("Windows: memoria pronta", StringComparison.Ordinal) ? null
+            : _wpdHint;
+        if (hint == _wpdHint) return;
+        _wpdHint = hint;
+        _dispatcher.BeginInvoke(() => { if (IsTransferring) TransferNotice = hint; });
+    }
+
     partial void OnTransferNoticeChanged(string? value) => OnPropertyChanged(nameof(ShowTransferTip));
 
     partial void OnIsPausedChanged(bool value) => OnPropertyChanged(nameof(PauseLabel));
@@ -1248,9 +1269,10 @@ public sealed partial class MainViewModel : ObservableObject
 
         // Un collegamento tutto suo: le miniature e le anteprime non rallentano la copia (e viceversa).
         // (Nella dimostrazione il telefono finto è uno solo e non regge due thread: si usa lo stesso collegamento.)
+        _wpdHint = null;
         IDeviceConnection conn = _demo
             ? _browse!
-            : new WorkerConnection(new ProcessWorkerLauncher(Environment.ProcessPath!), log: _log.Info);
+            : new WorkerConnection(new ProcessWorkerLauncher(Environment.ProcessPath!), log: TransferLog);
         TransferReport report;
         try
         {
@@ -1327,7 +1349,7 @@ public sealed partial class MainViewModel : ObservableObject
                  + (s.Remaining is { } r ? " · " + Remaining(r) : ""),
         };
         TransferCurrent = s.CurrentFile is null ? "" : s.CurrentFolder is null ? s.CurrentFile : $"{s.CurrentFile} → {s.CurrentFolder}";
-        TransferNotice = s.Notice;
+        TransferNotice = s.Notice ?? _wpdHint;
         var parts = new List<string>();
         if (s.Copied > 0) parts.Add($"✓ {s.Copied.ToString("N0", It)} copiati e verificati");
         if (s.Skipped > 0) parts.Add($"{s.Skipped.ToString("N0", It)} già sul PC");
