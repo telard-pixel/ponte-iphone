@@ -316,7 +316,7 @@ public sealed class AppleTests : IDisposable
         Assert.True(clock.Elapsed < TimeSpan.FromSeconds(10));
         Assert.Equal(0, report.Deleted);
         Assert.Equal(2, report.DeleteFailed);
-        Assert.Contains("Windows non mostra", report.DeleteProblem);
+        Assert.Contains("Windows non ha visto", report.DeleteProblem);
         Assert.Empty(fake.Deleted);
     }
 

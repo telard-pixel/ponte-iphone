@@ -81,7 +81,7 @@ public static class DeviceErrors
         SizeMismatch => "il file è arrivato incompleto",
         VerifyFailed => "la copia sul disco non corrisponde a quella arrivata",
         NoWpdMatch => "Windows non mostra questa foto, quindi non posso eliminarla: eliminala dall'app Foto",
-        WpdUnavailable => "Windows non mostra le foto di questo iPhone, che servono per eliminarle. Sblocca l'iPhone, scollega e ricollega il cavo e riprova, oppure eliminale dall'app Foto (hanno il bollino ✓ PC)",
+        WpdUnavailable => "Windows non ha visto le foto di questo iPhone, che servono per eliminarle: le mostra solo con lo schermo sbloccato. Sblocca l'iPhone, lascialo acceso e riprova",
         WpdAmbiguous => "ci sono più iPhone collegati: per eliminare lascia collegato solo questo",
         LockedForDelete => "l'iPhone è bloccato: per eliminare va sbloccato",
         0 => "errore sconosciuto",

@@ -99,7 +99,7 @@ public sealed class SmartBackend : IDeviceBackend
         // col telefono bloccato, WPD no. Se è bloccato lo si dice (il motore aspetta lo sblocco e riprova);
         // altrimenti si riprova un paio di volte, perché appena ricollegato Windows mostra la memoria con qualche secondo di ritardo.
         // Il 17/10 (1.0.54) Windows mostrava la memoria vuota per un po' dopo ogni avvio o ricollegamento, e alle 11:33,
-        // partendo più tardi, vedeva 2711 file: 8 secondi di attesa non bastavano. Ora fino a un minuto e mezzo, ogni 5 s (c'è anche il tempo di riavviare il collegamento USB).
+        // partendo più tardi, vedeva 2711 file: 8 secondi di attesa non bastavano. Ora fino a un minuto e mezzo, ogni 5 s, il tempo di sbloccare lo schermo.
         for (int attempt = 1; map is null && _wpdProblem == DeviceErrors.WpdUnavailable; attempt++)
         {
             if (_apple.IsLocked() == true)

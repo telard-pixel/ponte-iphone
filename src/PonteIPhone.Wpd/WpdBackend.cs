@@ -284,10 +284,11 @@ public sealed class WpdBackend : IDeviceBackend
                 read.Add(name);
                 Walk(id, name, 1, buffer, batch, ct, step);
             }
-            else if (_wholeStorage)
+            else if (_wholeStorage && MediaGrouper.DateFromFolder(name) is null)
             {
                 // Senza DCIM (17/10, iOS 27: Windows ha letto "tutta la memoria", 2141 file in 92 s) le cartelle del mese
                 // possono stare un livello più giù, dentro una cartella con un altro nome: si guardano anche quelle.
+                // Solo dentro cartelle che NON sono già di un mese: con la 1.0.64 si aprivano tutti i mesi, uno per uno.
                 foreach (var (subId, subName) in Subfolders(id, name, step, ct))
                 {
                     if (!wanted(subName)) continue;
@@ -476,6 +477,9 @@ public sealed class WpdBackend : IDeviceBackend
                 }
                 else step?.Invoke(null);
             }
+            // iPhone scollegato (o schermo bloccato, che su iOS 26+ chiude i dati): inutile leggere uno per uno.
+            if (callback.Status < 0 && DeviceErrors.Classify(callback.Status) == DeviceErrorKind.Gone)
+                throw new DeviceException("iPhone scollegato durante la lettura", callback.Status);
             return callback.Status < 0 ? "finita con errore (" + DeviceErrors.Describe(callback.Status) + ")" : null;
         }
         finally

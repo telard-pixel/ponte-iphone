@@ -1147,25 +1147,9 @@ public sealed partial class MainViewModel : ObservableObject
         _log.Info(message);
         if (message.StartsWith("Windows: memoria pronta", StringComparison.Ordinal)) SetWpdHint(null);
         else if (message.StartsWith("Windows mostra la memoria dell'iPhone vuota", StringComparison.Ordinal))
-            _dispatcher.BeginInvoke(async () => await RestartUsbForDeleteAsync());
-    }
-
-    private bool _usbRestartTried;
-
-    /// <summary>
-    /// Windows vede la memoria vuota: invece di chiedere all'utente di staccare il cavo ("che senso ha", 17/10) l'app
-    /// fa riavviare a Windows il dispositivo USB dell'iPhone, una volta per eliminazione. Windows chiede il permesso.
-    /// </summary>
-    private async Task RestartUsbForDeleteAsync()
-    {
-        if (!IsTransferring || _usbRestartTried) return;
-        _usbRestartTried = true;
-        SetWpdHint("Windows non vede ancora le foto: riavvio il collegamento con l'iPhone. Se Windows chiede il permesso, premi Sì.");
-        var (result, detail) = await AppleUsbRestart.RestartAsync(Device?.Serial);
-        _log.Info($"Riavvio del collegamento USB per eliminare: {result} ({detail})");
-        SetWpdHint(result == AppleUsbRestart.Outcome.Restarted
-            ? "Collegamento riavviato: l'eliminazione riprende appena l'iPhone torna. Tienilo sbloccato."
-            : "Windows non vede ancora le foto dell'iPhone. Tienilo sbloccato, poi scollega e ricollega il cavo: l'eliminazione riprende da sola.");
+            // 17/10: alle 13:14 Windows ha visto le foto da solo, senza ricollegare niente; poi il collegamento si è chiuso
+            // come con lo schermo bloccato (iOS 26+). Il riavvio USB (pnputil) rispondeva 3010, "serve riavviare il PC": tolto.
+            SetWpdHint("Sblocca lo schermo dell'iPhone e lascialo acceso: Windows vede le foto solo con lo schermo sbloccato. L'eliminazione parte da sola appena le vede.");
     }
 
     private void SetWpdHint(string? hint)
@@ -1293,7 +1277,6 @@ public sealed partial class MainViewModel : ObservableObject
         // Un collegamento tutto suo: le miniature e le anteprime non rallentano la copia (e viceversa).
         // (Nella dimostrazione il telefono finto è uno solo e non regge due thread: si usa lo stesso collegamento.)
         _wpdHint = null;
-        _usbRestartTried = false;
         IDeviceConnection conn = _demo
             ? _browse!
             : new WorkerConnection(new ProcessWorkerLauncher(Environment.ProcessPath!), log: TransferLog);
