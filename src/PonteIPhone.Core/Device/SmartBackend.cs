@@ -228,6 +228,13 @@ public sealed class SmartBackend : IDeviceBackend
                 results.Add(new DeleteResult(id, false, DeviceErrors.FileNotFound));
                 continue;
             }
+            if (now is null && !IsMainFile(file, wanted))
+            {
+                // Video Live, versione modificata, .AAE che iOS toglie un attimo dopo la foto: decide il principale,
+                // inutile rileggere l'elenco per questo (terza revisione del 17/10).
+                results.Add(new DeleteResult(id, false, DeviceErrors.NoWpdMatch));
+                continue;
+            }
             if (now is null || now.Size != file.Size || !string.Equals(now.Name, file.Name, StringComparison.OrdinalIgnoreCase))
             {
                 RetryFrom(i, $"l'oggetto di {file.Name} non corrisponde più ({now?.Name ?? "sparito"})");
@@ -247,7 +254,7 @@ public sealed class SmartBackend : IDeviceBackend
                 RemoveFromMap(map, wpdId);
                 _known.Remove(id);
             }
-            else if (!r.Refused)
+            else if (!r.Refused && IsMainFile(file, wanted))
             {
                 // Errore di Windows su questo file (es. "la periferica non funziona"): questo conta come non riuscito,
                 // gli altri si riprovano con un elenco nuovo invece di insistere sulla stessa sessione.

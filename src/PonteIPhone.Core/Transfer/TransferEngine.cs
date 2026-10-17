@@ -737,7 +737,7 @@ public sealed class TransferEngine
             }
             catch (DeviceException e)
             {
-                // Quattro intoppi (o sette scollegamenti) di fila senza che passi niente: insistere vorrebbe dire minuti
+                // Quattro intoppi (o sei scollegamenti più tre intoppi) di fila senza che passi niente: insistere vorrebbe dire minuti
                 // di attesa per niente. Ci si ferma e si dice come fare.
                 _log?.Warn("Cancellazione interrotta: " + e.Message);
                 _report.DeleteProblem ??= "il telefono non ha risposto alla cancellazione: eliminale dall'app Foto (hanno il bollino ✓ PC)";
@@ -783,6 +783,7 @@ public sealed class TransferEngine
                         _log?.Warn("Cancellazione interrotta: " + _report.DeleteProblem);
                         return;
                     }
+                    await Task.Delay(_delays[Math.Min(hiccups - 1, _delays.Count - 1)], ct);
                     continue;
                 }
             }
