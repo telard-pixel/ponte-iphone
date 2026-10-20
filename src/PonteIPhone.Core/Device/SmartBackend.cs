@@ -40,6 +40,10 @@ public sealed class SmartBackend : IDeviceBackend
     /// <summary>L'ultima lettura delle cartelle è fallita con un errore (non "memoria vuota"): una riprova sola.</summary>
     private bool _wpdReadFailed;
     private readonly Action<TimeSpan> _sleep;
+    /// <summary>File non trovati in Windows finora: nel registro solo i primi in dettaglio (20/10: 471 righe avevano
+    /// spinto fuori dal rapporto quelle su cosa mostrava Windows).</summary>
+    private int _missingCount;
+    private const int MissingDetail = 15;
     /// <summary>Quante volte riprovare, a 5 s l'una, se Windows mostra la memoria vuota.</summary>
     private const int WpdWaitAttempts = 18;
 
@@ -213,7 +217,7 @@ public sealed class SmartBackend : IDeviceBackend
                     results.Add(new DeleteResult(id, false, DeviceErrors.FileNotFound)); // già tolto (iOS toglie il video Live con la foto)
                     continue;
                 }
-                step(MissingNote(map, file));
+                if (++_missingCount <= MissingDetail) step(MissingNote(map, file));
                 results.Add(new DeleteResult(id, false, DeviceErrors.NoWpdMatch));
                 continue;
             }
@@ -264,7 +268,18 @@ public sealed class SmartBackend : IDeviceBackend
             }
             results.Add(r with { ObjectId = id });
         }
+        if (_missingCount > MissingDetail && results.Any(r => r.HResult == DeviceErrors.NoWpdMatch))
+            step($"Windows: finora {_missingCount} file non trovati (in dettaglio solo i primi {MissingDetail}); " + MapSummary(map));
         return results;
+    }
+
+    /// <summary>Cosa contiene l'elenco di Windows: file in tutto e per cartella (per capire cosa manca).</summary>
+    private static string MapSummary(Dictionary<string, List<RemoteFile>> map)
+    {
+        var all = map.Values.SelectMany(l => l).ToList();
+        var byFolder = all.GroupBy(f => f.Folder.Split('/')[0]).OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(g => $"{g.Key} {g.Count()}");
+        return $"Windows elenca {all.Count} file: " + string.Join(", ", byFolder);
     }
 
     private static bool IsDcim(string id) => id.StartsWith("/DCIM/", StringComparison.Ordinal);
@@ -482,7 +497,7 @@ public sealed class SmartBackend : IDeviceBackend
         }, CancellationToken.None, step);
         foreach (var r in read) _wpdFoldersRead.Add(r);
         _wpdWhole = true;
-        step($"Windows: letto tutto il Rullino ({count} file) in {clock.Elapsed.TotalSeconds:0.0} s");
+        step($"Windows: letto tutto il Rullino ({count} file in più) in {clock.Elapsed.TotalSeconds:0.0} s; " + MapSummary(map));
     }
 
     /// <summary>
