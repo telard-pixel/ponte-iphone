@@ -130,16 +130,6 @@
         <!-- ============================ avvisi in alto ============================ -->
         <StackPanel Grid.Row="1">
             <Border Background="{DynamicResource SystemFillColorAttentionBackgroundBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="0,1" Padding="16,8"
-                    Visibility="{Binding UpdateText, Converter={StaticResource NotNullToVis}}">
-                <DockPanel>
-                    <ui:Button DockPanel.Dock="Right" Appearance="Primary" Content="Aggiorna e riavvia" Command="{Binding InstallUpdateCommand}"
-                               IsEnabled="{Binding IsTransferring, Converter={StaticResource InverseBool}}" />
-                    <TextBlock Style="{StaticResource Icon}" Text="&#xE896;" Margin="0,0,10,0" Foreground="{DynamicResource AccentTextFillColorPrimaryBrush}" />
-                    <TextBlock VerticalAlignment="Center" Text="{Binding UpdateText}" />
-                </DockPanel>
-            </Border>
-            <Border Background="{DynamicResource SystemFillColorAttentionBackgroundBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
                     BorderThickness="0,1" Padding="16,8" x:Name="InstallBanner"
                     Visibility="{Binding ShowInstallBanner, Converter={StaticResource BoolToVis}}">
                 <DockPanel>
@@ -744,15 +734,34 @@
                         </DockPanel>
                     </Border>
 
+                    <TextBlock Text="Aggiornamenti" FontWeight="SemiBold" Margin="0,16,0,8" />
+                    <Border Style="{StaticResource SettingCard}">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
+                                <ui:ProgressRing IsIndeterminate="True" Width="16" Height="16" Margin="0,0,10,0"
+                                                 Visibility="{Binding UpdateChecking, Converter={StaticResource BoolToVis}}" />
+                                <ui:Button Content="Controlla" Command="{Binding CheckUpdatesNowCommand}"
+                                           IsEnabled="{Binding UpdateChecking, Converter={StaticResource InverseBool}}"
+                                           ToolTip="Cerca subito se c'è una versione nuova" />
+                                <ui:Button Content="Aggiorna e riavvia" Appearance="Primary" Margin="6,0,0,0" Command="{Binding InstallUpdateNowCommand}"
+                                           Visibility="{Binding UpdateReady, Converter={StaticResource BoolToVis}}"
+                                           IsEnabled="{Binding IsTransferring, Converter={StaticResource InverseBool}}"
+                                           ToolTip="Chiude l'app, installa la versione nuova e la riapre" />
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock Text="{Binding VersionText, Mode=OneWay}" />
+                                <TextBlock Text="{Binding UpdateStatus, Mode=OneWay}" Style="{StaticResource Caption}" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
                     <TextBlock Text="Informazioni" FontWeight="SemiBold" Margin="0,16,0,8" />
                     <Border Style="{StaticResource SettingCard}">
                         <DockPanel>
                             <ui:Button DockPanel.Dock="Right" Content="Invia rapporto" VerticalAlignment="Center" Margin="16,0,0,0" Command="{Binding SendReportCommand}"
                                        ToolTip="Manda subito il rapporto per l'assistenza e dice se è arrivato" />
                             <StackPanel>
-                                <TextBlock>
-                                    <Run Text="{Binding VersionText, Mode=OneWay}" /><Run Text=" · " /><Run Text="{Binding UpdateStatus, Mode=OneWay}" />
-                                </TextBlock>
+                                <TextBlock Text="Assistenza" />
                                 <TextBlock Style="{StaticResource Caption}" TextWrapping="Wrap"
                                            Text="Le foto finiscono in cartelle per anno e mese; quelle già copiate si saltano; gli aggiornamenti si installano da soli quando chiudi l'app. Se qualcosa va storto, il rapporto parte da solo verso l'assistenza (niente foto)." />
                             </StackPanel>

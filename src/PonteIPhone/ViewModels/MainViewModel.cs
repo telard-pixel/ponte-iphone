@@ -1725,7 +1725,7 @@ public sealed partial class MainViewModel : ObservableObject
         Line("iPhone", Device is null ? "nessuno" : $"{Device.DisplayName} · {Device.Model} · iOS {Device.Firmware}");
         Line("Stato", DeviceStatus);
         Line("Ultimo rapporto", _reporter.LastResult + (ProblemReporter.PendingCount is > 0 and var queued ? $" · {queued} in coda" : ""));
-        Line("Aggiornamenti", UpdateStatus.Length > 0 ? UpdateStatus : "non ancora controllati");
+        Line("Aggiornamenti", UpdateStatus);
         if (_lastEnumeration is not null) Line("Ultimo elenco", _lastEnumeration);
         if (Device is null && NoDeviceInfo is { } why) Line("Senza iPhone", why.Summary);
         if (_drops.Count > 0) Line("Scollegamenti", $"{_drops.Count} negli ultimi 10 minuti");
@@ -1829,9 +1829,11 @@ public sealed partial class MainViewModel : ObservableObject
 
     // ================================================================== aggiornamenti e installazione
 
-    [ObservableProperty] private string? _updateText;
-    [ObservableProperty] private bool _updateBusy;
-    [ObservableProperty] private string _updateStatus = "";
+    [ObservableProperty] private string _updateStatus = "Non ancora controllato";
+    /// <summary>Un controllo (o un download) è in corso: il pulsante Controlla aspetta.</summary>
+    [ObservableProperty] private bool _updateChecking;
+    /// <summary>Versione nuova scaricata e con firma verificata: si può installare subito.</summary>
+    [ObservableProperty] private bool _updateReady;
 
     public bool CanSelfInstall => !_demo && !SelfInstall.IsInstalled;
     [ObservableProperty] private bool _installBannerDismissed;
@@ -1841,56 +1843,70 @@ public sealed partial class MainViewModel : ObservableObject
     partial void OnInstallBannerDismissedChanged(bool value) => OnPropertyChanged(nameof(ShowInstallBanner));
 
     private DateTime _nextUpdateCheck = DateTime.MaxValue;
+    private string? _preparedUpdate;
+    /// <summary>"Aggiorna e riavvia": alla chiusura l'installazione riapre l'app invece di fare solo la prova di avvio.</summary>
+    private bool _installNow;
 
     private async Task CheckUpdatesAsync(bool automatic)
     {
         if (automatic && !Settings.AutoUpdate) return;
+        if (automatic) await Task.Delay(TimeSpan.FromSeconds(8));
+        // Un controllo alla volta: due download insieme si cancellerebbero il file a vicenda.
+        if (UpdateChecking || _installNow) return;
+        UpdateChecking = true;
         _nextUpdateCheck = DateTime.UtcNow + TimeSpan.FromHours(6); // un'app tenuta aperta per giorni si aggiorna lo stesso
         try
         {
-            if (automatic) await Task.Delay(TimeSpan.FromSeconds(8));
             UpdateStatus = "Controllo…";
-            _release = await _updates.CheckAsync(CancellationToken.None);
-            UpdateText = null; // niente pulsanti da premere: si installa da sola alla chiusura
-            if (_release is not null)
+            var release = await _updates.CheckAsync(CancellationToken.None);
+            if (release is null)
             {
-                _preparedUpdate = await _updates.PrepareAsync(_release, CancellationToken.None);
-                UpdateStatus = $"La {_release.Version} si installa da sola quando chiudi l'app";
-            }
-            else
-            {
+                _release = null;
+                _preparedUpdate = null;
+                UpdateReady = false;
                 UpdateStatus = $"Versione aggiornata ({UpdateService.Current})";
+                return;
             }
+            // Già scaricata e verificata la stessa versione: non si riscarica.
+            if (!UpdateReady || _release?.Version != release.Version || _preparedUpdate is null || !File.Exists(_preparedUpdate))
+            {
+                UpdateReady = false;
+                _preparedUpdate = null;
+                UpdateStatus = $"Scarico la {release.Version}…";
+                var file = await _updates.PrepareAsync(release, CancellationToken.None);
+                _release = release;
+                _preparedUpdate = file;
+                UpdateReady = true;
+            }
+            UpdateStatus = $"La {release.Version} è pronta: premi Aggiorna e riavvia, o si installa da sola quando chiudi l'app";
         }
         catch (Exception e) when (e is not OutOfMemoryException)
         {
             // Qualunque errore (GitHub, rete, antivirus sulla cartella): si scrive nel registro e si riprova più tardi.
-            UpdateStatus = "Controllo non riuscito: riprovo più tardi";
+            UpdateStatus = automatic ? "Controllo non riuscito: riprovo più tardi" : "Controllo non riuscito: controlla la connessione e riprova";
             _log.Warn("Controllo aggiornamenti: " + e.Message);
+        }
+        finally
+        {
+            UpdateChecking = false;
         }
     }
 
     [RelayCommand]
-    private Task CheckUpdatesNowAsync() => CheckUpdatesAsync(automatic: false);
-
-    [RelayCommand]
-    private async Task InstallUpdateAsync()
+    private Task CheckUpdatesNowAsync()
     {
-        if (_release is null || IsTransferring) return;
-        UpdateBusy = true;
-        try
-        {
-            if (await _updates.InstallAsync(_release, CancellationToken.None)) Application.Current.Shutdown();
-        }
-        catch (Exception e)
-        {
-            _log.Error("Aggiornamento", e);
-            ShowBanner("Aggiornamento non riuscito: l'app riproverà più tardi.", error: true);
-        }
-        finally
-        {
-            UpdateBusy = false;
-        }
+        if (_demo) { UpdateStatus = "Nella dimostrazione non si aggiorna"; return Task.CompletedTask; }
+        return CheckUpdatesAsync(automatic: false);
+    }
+
+    /// <summary>Installa subito la versione già scaricata: si chiude come sempre (rapporti, telefono) e l'installazione riapre l'app.</summary>
+    [RelayCommand]
+    private void InstallUpdateNow()
+    {
+        if (_demo || !UpdateReady || UpdateChecking || _preparedUpdate is null || _release is null || IsTransferring) return;
+        _installNow = true;
+        UpdateStatus = $"Installo la {_release.Version}: l'app si riapre da sola…";
+        Application.Current.MainWindow?.Close();
     }
 
     [RelayCommand]
@@ -1926,19 +1942,21 @@ public sealed partial class MainViewModel : ObservableObject
         if (!IsTransferring) return true;
         var answer = MessageBox.Show("È in corso un trasferimento. Interromperlo e chiudere?\n\nQuello già copiato resta sul PC; dal telefono non verrà tolto altro.",
             "Ponte iPhone", MessageBoxButton.YesNo, MessageBoxImage.Question);
-        if (answer != MessageBoxResult.Yes) return false;
+        if (answer != MessageBoxResult.Yes)
+        {
+            _installNow = false; // "Aggiorna e riavvia" annullato: alla prossima chiusura vale di nuovo l'installazione silenziosa
+            return false;
+        }
         _transferCts?.Cancel();
         return true;
     }
-
-    private string? _preparedUpdate;
 
     public async Task ShutdownAsync()
     {
         // Prima di tutto (la finestra si sta chiudendo): l'installazione aspetta che questo processo finisca.
         if (_preparedUpdate is not null && _release is not null && !_demo)
         {
-            try { _updates.Launch(_preparedUpdate, _release, silent: true); }
+            try { _updates.Launch(_preparedUpdate, _release, silent: !_installNow); }
             catch (Exception e) { _log.Error("Aggiornamento alla chiusura", e); }
         }
         _poll.Stop();

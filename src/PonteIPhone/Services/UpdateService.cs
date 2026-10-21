@@ -75,13 +75,6 @@ public sealed class UpdateService(AppLog log)
         return exe is null || sig is null ? null : new ReleaseInfo(Normalize(version), tag, exe, size, sig, notes);
     }
 
-    /// <summary>Scarica, verifica e avvia l'installazione. True se l'app deve chiudersi.</summary>
-    public async Task<bool> InstallAsync(ReleaseInfo release, CancellationToken ct)
-    {
-        Launch(await PrepareAsync(release, ct), release, silent: false);
-        return true;
-    }
-
     /// <summary>Scarica la versione nuova e ne controlla la firma. Restituisce il file pronto da installare.</summary>
     public async Task<string> PrepareAsync(ReleaseInfo release, CancellationToken ct)
     {
