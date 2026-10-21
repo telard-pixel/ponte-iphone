@@ -248,7 +248,14 @@ public sealed partial class MainViewModel : ObservableObject
         }
         await RefreshDevicesAsync();
         _poll.Start();
-        if (!_demo) _ = CheckUpdatesAsync(automatic: true);
+        // Riaperta dall'installazione: si dice com'è andata. Se è fallita non si riscarica subito la stessa versione.
+        var failed = Array.IndexOf(Program.Args, "--aggiornamento-fallito");
+        if (failed >= 0)
+            ShowBanner($"L'aggiornamento alla {Program.Args.ElementAtOrDefault(failed + 1) ?? "versione nuova"} non è riuscito: resta la {UpdateService.Current}. " +
+                       "Puoi riprovare da Impostazioni › Aggiornamenti › Controlla.", error: true);
+        else if (Program.Args.Contains("--aggiornato-da"))
+            ShowBanner($"Ponte iPhone è stata aggiornata alla {UpdateService.Current}.");
+        if (!_demo && failed < 0) _ = CheckUpdatesAsync(automatic: true);
     }
 
     /// <summary>Notifica di Windows: un dispositivo si è collegato o scollegato.</summary>
@@ -1113,7 +1120,7 @@ public sealed partial class MainViewModel : ObservableObject
     // ================================================================== copia e sposta
 
     [ObservableProperty]
-    [NotifyCanExecuteChangedFor(nameof(CopyCommand), nameof(MoveCommand), nameof(DeleteCommand))]
+    [NotifyCanExecuteChangedFor(nameof(CopyCommand), nameof(MoveCommand), nameof(DeleteCommand), nameof(InstallUpdateNowCommand))]
     private bool _isTransferring;
 
     [ObservableProperty] private bool _confirmMoveOpen;
@@ -1831,9 +1838,13 @@ public sealed partial class MainViewModel : ObservableObject
 
     [ObservableProperty] private string _updateStatus = "Non ancora controllato";
     /// <summary>Un controllo (o un download) è in corso: il pulsante Controlla aspetta.</summary>
-    [ObservableProperty] private bool _updateChecking;
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(InstallUpdateNowCommand))]
+    private bool _updateChecking;
     /// <summary>Versione nuova scaricata e con firma verificata: si può installare subito.</summary>
-    [ObservableProperty] private bool _updateReady;
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(InstallUpdateNowCommand))]
+    private bool _updateReady;
 
     public bool CanSelfInstall => !_demo && !SelfInstall.IsInstalled;
     [ObservableProperty] private bool _installBannerDismissed;
@@ -1844,17 +1855,18 @@ public sealed partial class MainViewModel : ObservableObject
 
     private DateTime _nextUpdateCheck = DateTime.MaxValue;
     private string? _preparedUpdate;
-    /// <summary>"Aggiorna e riavvia": alla chiusura l'installazione riapre l'app invece di fare solo la prova di avvio.</summary>
+    /// <summary>"Aggiorna e riavvia" premuto: l'installazione è già partita, alla chiusura non se ne lancia un'altra.</summary>
     private bool _installNow;
 
     private async Task CheckUpdatesAsync(bool automatic)
     {
         if (automatic && !Settings.AutoUpdate) return;
+        // Prima dell'attesa: il controllo periodico gira ogni 3 secondi e non deve partire tre volte.
+        _nextUpdateCheck = DateTime.UtcNow + TimeSpan.FromHours(6); // un'app tenuta aperta per giorni si aggiorna lo stesso
         if (automatic) await Task.Delay(TimeSpan.FromSeconds(8));
         // Un controllo alla volta: due download insieme si cancellerebbero il file a vicenda.
         if (UpdateChecking || _installNow) return;
         UpdateChecking = true;
-        _nextUpdateCheck = DateTime.UtcNow + TimeSpan.FromHours(6); // un'app tenuta aperta per giorni si aggiorna lo stesso
         try
         {
             UpdateStatus = "Controllo…";
@@ -1864,7 +1876,7 @@ public sealed partial class MainViewModel : ObservableObject
                 _release = null;
                 _preparedUpdate = null;
                 UpdateReady = false;
-                UpdateStatus = $"Versione aggiornata ({UpdateService.Current})";
+                UpdateStatus = "È l'ultima versione";
                 return;
             }
             // Già scaricata e verificata la stessa versione: non si riscarica.
@@ -1883,7 +1895,9 @@ public sealed partial class MainViewModel : ObservableObject
         catch (Exception e) when (e is not OutOfMemoryException)
         {
             // Qualunque errore (GitHub, rete, antivirus sulla cartella): si scrive nel registro e si riprova più tardi.
-            UpdateStatus = automatic ? "Controllo non riuscito: riprovo più tardi" : "Controllo non riuscito: controlla la connessione e riprova";
+            UpdateStatus = UpdateReady && _release is not null
+                ? $"La {_release.Version} è pronta: premi Aggiorna e riavvia, o si installa da sola quando chiudi l'app"
+                : automatic ? "Controllo non riuscito: riprovo più tardi" : "Controllo non riuscito: riprova tra qualche minuto";
             _log.Warn("Controllo aggiornamenti: " + e.Message);
         }
         finally
@@ -1899,12 +1913,32 @@ public sealed partial class MainViewModel : ObservableObject
         return CheckUpdatesAsync(automatic: false);
     }
 
-    /// <summary>Installa subito la versione già scaricata: si chiude come sempre (rapporti, telefono) e l'installazione riapre l'app.</summary>
-    [RelayCommand]
+    private bool CanInstallUpdateNow() => !_demo && UpdateReady && !UpdateChecking && !IsTransferring && !_installNow;
+
+    /// <summary>
+    /// Installa subito la versione già scaricata. L'installazione parte prima di chiudere: se Windows o l'antivirus
+    /// non la lasciano partire, la finestra resta aperta e lo dice (invece di sparire senza riaprirsi).
+    /// Poi si chiude come sempre (rapporti, telefono); l'installazione aspetta la chiusura e riapre l'app.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanInstallUpdateNow))]
     private void InstallUpdateNow()
     {
-        if (_demo || !UpdateReady || UpdateChecking || _preparedUpdate is null || _release is null || IsTransferring) return;
+        if (!CanInstallUpdateNow() || _preparedUpdate is null || _release is null) return;
+        try
+        {
+            if (!File.Exists(_preparedUpdate)) throw new FileNotFoundException("File dell'aggiornamento sparito (antivirus?)", _preparedUpdate);
+            _updates.Launch(_preparedUpdate, _release, silent: false);
+        }
+        catch (Exception e) when (e is not OutOfMemoryException)
+        {
+            _log.Error("Aggiorna e riavvia", e);
+            _preparedUpdate = null;
+            UpdateReady = false;
+            UpdateStatus = "Installazione non partita (forse l'antivirus ha bloccato il file): premi Controlla per riscaricarla";
+            return;
+        }
         _installNow = true;
+        InstallUpdateNowCommand.NotifyCanExecuteChanged();
         UpdateStatus = $"Installo la {_release.Version}: l'app si riapre da sola…";
         Application.Current.MainWindow?.Close();
     }
@@ -1942,11 +1976,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (!IsTransferring) return true;
         var answer = MessageBox.Show("È in corso un trasferimento. Interromperlo e chiudere?\n\nQuello già copiato resta sul PC; dal telefono non verrà tolto altro.",
             "Ponte iPhone", MessageBoxButton.YesNo, MessageBoxImage.Question);
-        if (answer != MessageBoxResult.Yes)
-        {
-            _installNow = false; // "Aggiorna e riavvia" annullato: alla prossima chiusura vale di nuovo l'installazione silenziosa
-            return false;
-        }
+        if (answer != MessageBoxResult.Yes) return false;
         _transferCts?.Cancel();
         return true;
     }
@@ -1954,9 +1984,9 @@ public sealed partial class MainViewModel : ObservableObject
     public async Task ShutdownAsync()
     {
         // Prima di tutto (la finestra si sta chiudendo): l'installazione aspetta che questo processo finisca.
-        if (_preparedUpdate is not null && _release is not null && !_demo)
+        if (_preparedUpdate is not null && _release is not null && !_demo && !_installNow)
         {
-            try { _updates.Launch(_preparedUpdate, _release, silent: !_installNow); }
+            try { _updates.Launch(_preparedUpdate, _release, silent: true); }
             catch (Exception e) { _log.Error("Aggiornamento alla chiusura", e); }
         }
         _poll.Stop();

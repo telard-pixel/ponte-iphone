@@ -1,21 +1,31 @@
-# Disegna l'icona di Ponte iPhone (telefono con freccia verso il basso) e scrive app.ico.
+# Disegna l'icona di Ponte iPhone (telefono con la foto e bollino verde con la freccia, 21/10) e scrive app.ico.
 # Uso: python3 tools/genera-icona.py src/PonteIPhone/app.ico anteprima.png  (serve Pillow)
 from PIL import Image, ImageDraw
 import sys, struct, io
 S=32; N=32*S
-img=Image.new("RGBA",(N,N),(0,0,0,0)); d=ImageDraw.Draw(img)
+W=(255,255,255,255)
 def P(v): return v*S
-d.rounded_rectangle([P(.5),P(.5),P(31.5),P(31.5)],radius=P(7.5),fill=(0x0b,0x63,0xb6,255))
-# telefono
-d.rounded_rectangle([P(9),P(4.5),P(23),P(27.5)],radius=P(3.2),outline=(255,255,255,255),width=int(P(2.1)))
-d.rounded_rectangle([P(13.4),P(7),P(18.6),P(8.6)],radius=P(.8),fill=(255,255,255,255))
-# freccia
-w=int(P(2.2))
-d.line([P(16),P(11.5),P(16),P(21)],fill=(255,255,255,255),width=w)
-d.line([P(11.6),P(17),P(16.2),P(21.6)],fill=(255,255,255,255),width=w)
-d.line([P(20.4),P(17),P(15.8),P(21.6)],fill=(255,255,255,255),width=w)
-for cx,cy in ((16,11.5),(11.6,17),(20.4,17),(16,21.4)):
-    d.ellipse([P(cx)-w/2,P(cy)-w/2,P(cx)+w/2,P(cy)+w/2],fill=(255,255,255,255))
+def cap_line(d,pts,w):
+    for p,q in zip(pts,pts[1:]): d.line([p,q],fill=W,width=int(w))
+    for x,y in pts: d.ellipse([x-w/2,y-w/2,x+w/2,y+w/2],fill=W)
+# sfondo: quadrato arrotondato azzurro sfumato verso il blu
+grad=Image.new("RGBA",(N,N)); g=ImageDraw.Draw(grad)
+top,bot=(0x34,0x8f,0xf2),(0x10,0x4e,0xb5)
+for y in range(N):
+    t=y/(N-1); g.line([(0,y),(N,y)],fill=tuple(int(a+(b-a)*t) for a,b in zip(top,bot))+(255,))
+mask=Image.new("L",(N,N),0); ImageDraw.Draw(mask).rounded_rectangle([P(1),P(1),P(31),P(31)],radius=P(7),fill=255)
+img=Image.new("RGBA",(N,N),(0,0,0,0)); img.paste(grad,(0,0),mask); d=ImageDraw.Draw(img)
+# telefono con la foto (sole e monti) sullo schermo
+d.rounded_rectangle([P(6),P(3.5),P(20.5),P(27.5)],radius=P(3.2),fill=W)
+d.rounded_rectangle([P(7.8),P(5.3),P(18.7),P(25.7)],radius=P(1.8),fill=(0x10,0x5e,0xc8,255))
+x0,y0,x1,y1=7.8,7,18.7,21; w,h=x1-x0,y1-y0
+d.ellipse([P(x1-w*.36),P(y0+h*.14),P(x1-w*.14),P(y0+h*.14+w*.22)],fill=(0xff,0xd2,0x4a,255))
+d.polygon([(P(x0),P(y1)),(P(x0),P(y1-h*.12)),(P(x0+w*.32),P(y0+h*.42)),(P(x0+w*.56),P(y1-h*.3)),(P(x0+w*.7),P(y1-h*.42)),(P(x1),P(y1-h*.1)),(P(x1),P(y1))],fill=W)
+# bollino verde con la freccia verso il basso (scarica sul PC)
+d.ellipse([P(16.3),P(16.3),P(30.3),P(30.3)],fill=(0x0c,0x4a,0xa8,255))
+d.ellipse([P(17.6),P(17.6),P(29),P(29)],fill=(0x2e,0xc4,0x6b,255))
+cap_line(d,[(P(23.3),P(19.9)),(P(23.3),P(26.2))],P(1.9))
+cap_line(d,[(P(20.6),P(23.5)),(P(23.3),P(26.2)),(P(26),P(23.5))],P(1.9))
 sizes=[16,20,24,32,40,48,64,128,256]
 imgs=[img.resize((s,s),Image.LANCZOS) for s in sizes]
 img.resize((256,256),Image.LANCZOS).save(sys.argv[2])

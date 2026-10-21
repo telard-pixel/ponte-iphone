@@ -745,8 +745,8 @@
                                            ToolTip="Cerca subito se c'è una versione nuova" />
                                 <ui:Button Content="Aggiorna e riavvia" Appearance="Primary" Margin="6,0,0,0" Command="{Binding InstallUpdateNowCommand}"
                                            Visibility="{Binding UpdateReady, Converter={StaticResource BoolToVis}}"
-                                           IsEnabled="{Binding IsTransferring, Converter={StaticResource InverseBool}}"
-                                           ToolTip="Chiude l'app, installa la versione nuova e la riapre" />
+                                           ToolTipService.ShowOnDisabled="True"
+                                           ToolTip="Chiude l'app, installa la versione nuova e la riapre (non durante una copia o un'eliminazione)" />
                             </StackPanel>
                             <StackPanel>
                                 <TextBlock Text="{Binding VersionText, Mode=OneWay}" />
