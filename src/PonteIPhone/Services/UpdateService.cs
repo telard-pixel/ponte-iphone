@@ -176,7 +176,8 @@ public static class UpdateInstaller
         {
             log.Error("Installazione dell'aggiornamento", e);
             // Alla chiusura l'utente non si aspetta di vedere riaprirsi l'app: si riprova alla prossima chiusura.
-            if (!silent) Start(target, []);
+            // Riaperta con l'avviso: senza, l'utente che ha premuto "Aggiorna e riavvia" ritroverebbe la vecchia senza spiegazioni.
+            if (!silent) Start(target, ["--aggiornamento-fallito", UpdateService.Current.ToString()])?.Dispose();
             return;
         }
 
