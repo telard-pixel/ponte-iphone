@@ -43,5 +43,12 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 MemoryMax=200M
 
+# Revisione 29/10/2026 (sulla VPS era un drop-in, 50-chiusure.conf): come il pannello targhe.
+TasksMax=64
+UMask=0077
+RestrictSUIDSGID=yes
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
 [Install]
 WantedBy=multi-user.target
