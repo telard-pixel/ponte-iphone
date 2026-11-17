@@ -17,7 +17,8 @@ namespace PonteIPhone.Services;
 /// </summary>
 public sealed class ProblemReporter(AppLog log)
 {
-    public const string Endpoint = "https://server-log.duckdns.org/api/rapporto";
+    // 17/11/2026: il ricevitore e' sulla VM roberto-vm, raggiunta via zrok (la VPS e' spenta).
+    public const string Endpoint = "https://serverlogmargherita.shares.zrok.io/api/rapporto";
     private const int MaxPerDay = 10;
     private const int MaxChars = 400_000;
     private const int MaxPending = 5;
